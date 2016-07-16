@@ -30,20 +30,21 @@ module.exports = class FirebaseQueuesManager
 
   # This is run on an interval
   checkQueues: ->
-    usedCpuPercent = @osMonitor.cpuLoad().percent
-    usedMemPercent = @osMonitor.memory().percent
-    freeWorkerSlots = @freeWorkerSlots(usedCpuPercent, usedMemPercent, @getTotalWorkers())
+    @osMonitor.getStats().then (stats) =>
+      usedCpuPercent = stats.cpu.percent
+      usedMemPercent = stats.memory.percent
+      freeWorkerSlots = @freeWorkerSlots(usedCpuPercent, usedMemPercent, @getTotalWorkers())
 
-    neededWorkers = @getTotalNeededWorkers()
-    if neededWorkers > freeWorkerSlots
-      shutdownWorkers = @freeUpWorkers(neededWorkers-freeWorkerSlots)
-      for shutdownWorker in shutdownWorkers
-        shutdownWorker.then =>
-          @allocateNewWorkers(1)
+      neededWorkers = @getTotalNeededWorkers()
+      if neededWorkers > freeWorkerSlots
+        shutdownWorkers = @freeUpWorkers(neededWorkers-freeWorkerSlots)
+        for shutdownWorker in shutdownWorkers
+          shutdownWorker.then =>
+            @checkQueues()
 
-    # Allocate what we can
-    if freeWorkerSlots > 0
-      @allocateNewWorkers(freeWorkerSlots)
+      # Allocate what we can
+      if freeWorkerSlots > 0
+        @allocateNewWorkers(freeWorkerSlots)
 
   getTotalWorkers: ->
     totWorkers = 0

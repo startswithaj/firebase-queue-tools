@@ -1,4 +1,5 @@
 os = require 'os'
+Bluebird = require 'bluebird'
 
 cpuAverage = ->
   totalIdle = 0
@@ -20,7 +21,6 @@ cpuAverage = ->
     total
   }
 
-start = cpuAverage()
 
 ###*
  * @return {Object} dif - difference of usage CPU
@@ -29,32 +29,44 @@ start = cpuAverage()
  * @return {Float}  dif.percent
 ###
 cpuLoad = ->
-  end = cpuAverage()
-  dif = {}
-
-  dif.idle  = end.idle  - start.idle
-  dif.total = end.total - start.total
-
-  dif.percent = 1 - dif.idle / dif.total
-
   start = cpuAverage()
+  Bluebird.delay(100).then ->
+    end = cpuAverage()
+    dif = {}
 
-  return dif
+    dif.idle  = end.idle  - start.idle
+    dif.total = end.total - start.total
+
+    dif.percent = 1 - dif.idle / dif.total
+
+    start = cpuAverage()
+
+    return dif
 
 memory = ->
   free = os.freemem()
   total = os.totalmem()
   proc = process.memoryUsage().rss
-  return {
-    percent: (total-free) / total
-    free: free / 1024 / 1024
-    total: total / 1024 / 1024
-    proc: proc / 1024 / 1024
-  }
+  new Bluebird(
+    (resolve) ->
+      resolve {
+        percent: (total-free) / total
+        free: free / 1024 / 1024
+        total: total / 1024 / 1024
+        proc: proc / 1024 / 1024
+      }
+  )
 
+getStats = ->
+  Bluebird.join(
+    cpuLoad()
+    memory()
+  ).then (cpu, memory) ->
+    return {cpu, memory}
 
 module.exports = {
   cpuAverage
   cpuLoad
   memory
+  getStats
 }
