@@ -3,11 +3,8 @@ START_TIME = Date.now()
 
 module.exports = class FirebaseQueueManager
 
-  constructor: ({tasksRef}, @config, @logger) ->
-    assert tasksRef, 'FirebaseQueueManager requires object with fb tasksRef'
-
-    @logger ?= console
-    @config ?= {}
+  constructor: ({tasksRef} = {}, @config = {}, @logger = console) ->
+    assert tasksRef, 'FirebaseQueueMonitor requires Queue or object with .tasksRef'
 
     @config.startStates    ?= [null, undefined]
     @config.progressStates ?= ['in_progress']
@@ -27,11 +24,11 @@ module.exports = class FirebaseQueueManager
     @snapshots = []
     @startTakingSnapShot(@config.interval)
 
-    queueTasksRef.on 'child_added', (snapshot) =>
+    tasksRef.on 'child_added', (snapshot) =>
       @taskAddedOrChanged(snapshot)
-    queueTasksRef.on 'child_changed', (snapshot) =>
+    tasksRef.on 'child_changed', (snapshot) =>
       @taskAddedOrChanged(snapshot)
-    queueTasksRef.on 'child_removed', @taskRemoved
+    tasksRef.on 'child_removed', @taskRemoved
 
   taskRemoved: (snapshot) =>
     @logger.log "Task #{key} removed"
@@ -102,6 +99,9 @@ module.exports = class FirebaseQueueManager
 
   getInProgressCount: ->
     Object.keys(@inProgressTasks).length
+
+  getErroredCount: ->
+    Object.keys(@erroredTasks).length
 
   takeSnapshot: =>
     addedSinceLastInterval = @addedTotal - @addedIntervalSnapshot

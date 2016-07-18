@@ -5,6 +5,7 @@ module.exports = class FirebaseQueuesManager
   ###*
    * @param  {Logger}    logger - logger object defaults to console
    * @param  {osMonitor} osMonitor - Monitors and reports cpu and memory usuage
+   * @param  {funcition} thresholdReachedCB - Callback that will be called if we hit the cpu or memory thresholds
    * @param  {Float}  cpuThreshold - will stop creating workers once this is reached (0.9 = 90%)
    * @return {Float}  memThreshold - will stop creating workers once this is reached (0.7 = 70%)
    * @return {FirebaseQueuesManager}
@@ -28,30 +29,30 @@ module.exports = class FirebaseQueuesManager
       minWorkers
     }
 
-  # This is run on an interval
+  # This should be run on an interval
   checkQueues: ->
     @osMonitor.getStats().then (stats) =>
       usedCpuPercent = stats.cpu.percent
       usedMemPercent = stats.memory.percent
-      freeWorkerSlots = @freeWorkerSlots(usedCpuPercent, usedMemPercent, @getTotalWorkers())
+      freeWorkerSlots = @_freeWorkerSlots(usedCpuPercent, usedMemPercent, @_getTotalWorkers())
 
-      neededWorkers = @getTotalNeededWorkers()
+      neededWorkers = @_getTotalNeededWorkers()
       if neededWorkers > freeWorkerSlots
-        shutdownWorkers = @freeUpWorkers(neededWorkers-freeWorkerSlots)
+        shutdownWorkers = @_freeUpWorkers(neededWorkers-freeWorkerSlots)
         for shutdownWorker in shutdownWorkers
           shutdownWorker.then =>
             @checkQueues()
 
       # Allocate what we can
       if freeWorkerSlots > 0
-        @allocateNewWorkers(freeWorkerSlots)
+        @_allocateNewWorkers(freeWorkerSlots)
 
-  getTotalWorkers: ->
+  _getTotalWorkers: ->
     totWorkers = 0
     for managedQueue in @managedQueues
       totWorkers += managedQueue.queue.getWorkerCount()
 
-  getTotalNeededWorkers: ->
+  _getTotalNeededWorkers: ->
     nWorkers = 0
     for managedQueue in @managedQueues
       pendingTasks = managedQueue.queueMonitor.getPendingTasksCount()
@@ -60,10 +61,10 @@ module.exports = class FirebaseQueuesManager
       aptps = managedQueue.queueMonitor.avgProcTimePerTask()
       minWorkers = managedQueue.minWorkers
 
-      nWorker += @shouldIncreaseWorkers(pendingTasks, totWorkers, prtps, aptps, minWorkers)
+      nWorker += @_shouldIncreaseWorkers(pendingTasks, totWorkers, prtps, aptps, minWorkers)
     return nWorkers
 
-  freeUpWorkers: (neededWorkerCount) ->
+  _freeUpWorkers: (neededWorkerCount) ->
     shutdownWorkers = []
     for managedQueue in @managedQueues
       pendingTasks = managedQueue.queueMonitor.getPendingTasksCount()
@@ -72,7 +73,7 @@ module.exports = class FirebaseQueuesManager
       aptps = managedQueue.queueMonitor.avgProcTimePerTask()
       minWorkers = managedQueue.minWorkers
 
-      removableWorkers = @canReduceWorkers(pendingTasks, totWorkers, prtps, aptps, minWorkers)
+      removableWorkers = @_canReduceWorkers(pendingTasks, totWorkers, prtps, aptps, minWorkers)
       i = 0
       while i < removableWorkers
         if neededWorkerCount > 0
@@ -81,7 +82,7 @@ module.exports = class FirebaseQueuesManager
 
     return shutdownWorkers
 
-  allocateNewWorkers: (freeWorkerSlots) ->
+  _allocateNewWorkers: (freeWorkerSlots) ->
     for managedQueue in @managedQueues
       unless freeWorkerSlots > 0
         break
@@ -92,14 +93,14 @@ module.exports = class FirebaseQueuesManager
       aptps = managedQueue.queueMonitor.avgProcTimePerTask()
       minWorkers = managedQueue.minWorkers
 
-      neededWorkers = @shouldIncreaseWorkers(pendingTasks, totWorkers, prtps, aptps, minWorkers)
+      neededWorkers = @_shouldIncreaseWorkers(pendingTasks, totWorkers, prtps, aptps, minWorkers)
       i = 0
       while i < neededWorkers
         if freeWorkerSlots > 0
           managedQueue.addWorker()
           freeWorkerSlots--
 
-  canReduceWorkers: (pendingTasks, totWorkers, peakRcdTasksPS, avgProcTimePerTask, minWorkers) ->
+  _canReduceWorkers: (pendingTasks, totWorkers, peakRcdTasksPS, avgProcTimePerTask, minWorkers) ->
     if totWorkers <= minWorkers
       return 0
 
@@ -108,7 +109,7 @@ module.exports = class FirebaseQueuesManager
 
     return 0
 
-  shouldIncreaseWorkers:  (pendingTasks, totWorkers, peakRcdTasksPS, avgProcTimePerTask, minWorkers) ->
+  _shouldIncreaseWorkers:  (pendingTasks, totWorkers, peakRcdTasksPS, avgProcTimePerTask, minWorkers) ->
     peakNeededWorkers = Math.floor(avgProcTimePerTask * peakRcdTasksPS)
     nowNeededWorkers = Math.floor(pendingTasks * avgProcTimePerTask)
     if nowNeededWorkers > totWorkers
@@ -120,7 +121,7 @@ module.exports = class FirebaseQueuesManager
     return 0
 
   # aka free system resounces can support another ~x workers
-  freeWorkerSlots: (cpuUsed, memUsed, totWorkers) ->
+  _freeWorkerSlots: (cpuUsed, memUsed, totWorkers) ->
     if cpuUsed > @cpuThreshold or memUsed > @memThreshold
       @resourceThresholdReachedCB({cpuUsed, memUsed})
       return -1

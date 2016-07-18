@@ -9,6 +9,11 @@
   "author": "",
   "license": "ISC",
   "devDependencies": {
-    "chai": "^3.5.0"
+    "chai": "^3.5.0",
+    "chai-spies": "^0.7.1"
+  },
+  "dependencies": {
+    "bluebird": "^3.4.1",
+    "firebase": "^3.2.0"
   }
 }
