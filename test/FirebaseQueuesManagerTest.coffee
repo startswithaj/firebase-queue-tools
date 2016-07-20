@@ -15,7 +15,7 @@ getMockQueue = (name, workerCount) ->
 
 
 
-describe.only 'FirebaseQueuesManager', ->
+describe 'FirebaseQueuesManager', ->
   it 'Constructor', ->
     fbqm = new FirebaseQueuesManager()
     expect(fbqm.logger).not.to.be.undefined
@@ -24,6 +24,7 @@ describe.only 'FirebaseQueuesManager', ->
   describe 'Methods', ->
 
     describe 'addQueue', ->
+
       it 'throw when no queue', ->
         fbqm = new FirebaseQueuesManager()
         expect(-> fbqm.addQueue()).to.throw('AssertionError: FirebaseQueuesManager.addQueue requires Queue param')
@@ -47,8 +48,8 @@ describe.only 'FirebaseQueuesManager', ->
         fbqm = new FirebaseQueuesManager(logger)
         fbqm.addQueue(mockQueue)
 
-        expect(fbqm.managedQueues['mockQueuePath']).not.to.be.undefined
-        managedQueue = fbqm.managedQueues['mockQueuePath']
+        expect(fbqm.managedQueues[0]).not.to.be.undefined
+        managedQueue = fbqm.managedQueues[0]
         expect(managedQueue.queue).to.equal mockQueue
         expect(managedQueue.queueMonitor).to.be.instanceof FirebaseQueueMonitor
         expect(managedQueue.minWorkers).to.equal 1
@@ -58,125 +59,483 @@ describe.only 'FirebaseQueuesManager', ->
         mockMonitor = {}
         fbqm = new FirebaseQueuesManager(logger)
         fbqm.addQueue(mockQueue, mockMonitor)
-        expect(fbqm.managedQueues['mockQueuePath']).not.to.be.undefined
-        managedQueue = fbqm.managedQueues['mockQueuePath']
+        expect(fbqm.managedQueues[0]).not.to.be.undefined
+        managedQueue = fbqm.managedQueues[0]
         expect(managedQueue.queue).to.equal mockQueue
         expect(managedQueue.queueMonitor).to.equal mockMonitor
         expect(managedQueue.minWorkers).to.equal 1
 
-      it '_getTotalWorkers', ->
+      describe 'priority', ->
+        it 'defaults to add order', ->
+
+          mockQueue1 = getMockQueue('one')
+          mockQueue2 = getMockQueue('two')
+          mockQueue3 = getMockQueue('three')
+
+          fbqm = new FirebaseQueuesManager(logger)
+          fbqm.addQueue mockQueue1
+          fbqm.addQueue mockQueue2
+          fbqm.addQueue mockQueue3
+
+          expect(fbqm.managedQueues[0].priority).to.equal 0
+          expect(fbqm.managedQueues[1].priority).to.equal 1
+          expect(fbqm.managedQueues[2].priority).to.equal 2
+          expect(fbqm.managedQueues[0].queue).to.equal mockQueue1
+          expect(fbqm.managedQueues[1].queue).to.equal mockQueue2
+          expect(fbqm.managedQueues[2].queue).to.equal mockQueue3
+
+        it 'respects priority argument', ->
+          mockQueue1 = getMockQueue('one')
+          mockQueue2 = getMockQueue('two')
+          mockQueue3 = getMockQueue('three')
+
+          fbqm = new FirebaseQueuesManager(logger)
+          fbqm.addQueue mockQueue2, null, null, 2
+          fbqm.addQueue mockQueue3, null, null, 3
+          fbqm.addQueue mockQueue1, null, null, 1
+
+          expect(fbqm.managedQueues[0].priority).to.equal 1
+          expect(fbqm.managedQueues[1].priority).to.equal 2
+          expect(fbqm.managedQueues[2].priority).to.equal 3
+          expect(fbqm.managedQueues[0].queue).to.equal mockQueue1
+          expect(fbqm.managedQueues[1].queue).to.equal mockQueue2
+          expect(fbqm.managedQueues[2].queue).to.equal mockQueue3
+
+    describe '_sumTotalWorkers', ->
+      it 'no queues', ->
+        fbqm = new FirebaseQueuesManager(logger)
+        result = fbqm._sumTotalWorkers()
+        expect(result).to.equal 0
+
+      it 'multiple queues', ->
         fbqm = new FirebaseQueuesManager(logger)
         fbqm.addQueue mockQueue1 = getMockQueue('1', 1)
         fbqm.addQueue mockQueue2 = getMockQueue('2', 2)
         expect(mockQueue1.getWorkerCount()).to.equal 1
-        expect(fbqm._getTotalWorkers()).to.equal 3
+        expect(fbqm._sumTotalWorkers()).to.equal 3
         fbqm.addQueue mockQueue2 = getMockQueue('3', 3)
-        expect(fbqm._getTotalWorkers()).to.equal 6
+        expect(fbqm._sumTotalWorkers()).to.equal 6
 
-      describe '_canReduceWorkers', ->
+    describe '_canReduceWorkers', ->
 
-        it 'wont allow less than minWorkers', ->
-          fbqm = new FirebaseQueuesManager(logger)
-          result = fbqm._canReduceWorkers(null, 3, null, null, 3)
-          expect(result).to.equal 0
-          result = fbqm._canReduceWorkers(null, 2, null, null, 3)
-          expect(result).to.equal 0
+      it 'wont allow less than minWorkers', ->
+        fbqm = new FirebaseQueuesManager(logger)
+        result = fbqm._canReduceWorkers(3, null, null, null, 3)
+        expect(result).to.equal 0
+        result = fbqm._canReduceWorkers(null, 2, null, null, 3)
+        expect(result).to.equal 0
 
-        it 'returns difference between currently needed workers and totWorkers', ->
-          fbqm = new FirebaseQueuesManager(logger)
-          # 3 tasks pending * averageSpeed of 3 seconds per tasks means we need 9 workers if thats the current rate
-          result = fbqm._canReduceWorkers(3, 12, null, 3, null)
-          expect(result).to.equal 3
+      it 'returns difference between currently needed workers and totWorkers', ->
+        fbqm = new FirebaseQueuesManager(logger)
+        # 3 tasks pending * averageSpeed of 3 seconds per tasks means we need 9 workers if thats the current rate
+        # (currentWorkerCount, pendingTasks, avgProcTimePerTask, peakRcdTasksPS, minWorkers)
+        result = fbqm._canReduceWorkers(12, 3, 3)
+        expect(result).to.equal 3
 
-        it 'returns 0 if tot workers < needed workers', ->
-          fbqm = new FirebaseQueuesManager(logger)
-          # 3 tasks pending * averageSpeed of 3 seconds per tasks means we need 9 workers if thats the current rate
-          result = fbqm._canReduceWorkers(3, 5, null, 3, null)
-          expect(result).to.equal 0
+      it 'returns 0 if tot workers < needed workers', ->
+        fbqm = new FirebaseQueuesManager(logger)
+        # 3 tasks pending * averageSpeed of 3 seconds per tasks means we need 9 workers if thats the current rate
+        result = fbqm._canReduceWorkers(9, 4, 3)
+        expect(result).to.equal 0
 
-      describe '_shouldIncreaseWorkers', ->
+    describe '_needsMoreWorkers', ->
 
-        it 'returns number or workers to handle current load', ->
-          fbqm = new FirebaseQueuesManager(logger)
-          result = fbqm._shouldIncreaseWorkers(3, 6, null, 3, null)
-          expect(result).to.equal 3
+      it 'returns number or workers to handle current load', ->
+        fbqm = new FirebaseQueuesManager(logger)
+        result = fbqm._needsMoreWorkers(6, 3, 3)
+        expect(result).to.equal 3
+
+      it 'returns 0 if no need for more workers even', ->
+        fbqm = new FirebaseQueuesManager(logger)
+        result = fbqm._needsMoreWorkers(9, 3, 3)
+        expect(result).to.equal 0
+
+      it 'returns 0 if no need for more workers excess', ->
+        fbqm = new FirebaseQueuesManager(logger)
+        result = fbqm._needsMoreWorkers(13, 3, 3)
+        expect(result).to.equal 0
+
+    describe '_couldUseMoreWorkers', ->
+      # 'returns number of workers to cover peak usage per/second or current usage which ever is highest'
+      it 'returns number of workers to cover peak usage', ->
+        fbqm = new FirebaseQueuesManager(logger)
+        result = fbqm._couldUseMoreWorkers(5, 0, 3, 3)
+        expect(result).to.equal 4
+
+      it 'returns number of workers to current usage', ->
+        fbqm = new FirebaseQueuesManager(logger)
+        result = fbqm._couldUseMoreWorkers(5, 4, 3, 3)
+        expect(result).to.equal 7
+
+      it 'returns 0 if has workers to cover peak usage', ->
+        fbqm = new FirebaseQueuesManager(logger)
+        result = fbqm._couldUseMoreWorkers(9, 0, 3, 3)
+        expect(result).to.equal 0
+
+    describe '_freeWorkerSlots', ->
+
+      it 'returns returns 0 when cpu threshold reached', ->
+        fbqm = new FirebaseQueuesManager(logger, null, null, null)
+        result = fbqm._freeWorkerSlots(0.99, null, null)
+        expect(result).to.equal 0
+
+      it 'calls thresholdReachedCB when mem threshold reached', ->
+        spy = chai.spy()
+        fbqm = new FirebaseQueuesManager(logger, null, null, null, spy)
+        result = fbqm._freeWorkerSlots(null, 0.91, null)
+        expect(spy).to.have.been.called.with({cpuUsed: null, memUsed: 0.91})
+        expect(result).to.equal 0
+
+      it 'calls thresholdReachedCB when both thresholds reached', ->
+        spy = chai.spy()
+        fbqm = new FirebaseQueuesManager(logger, null, null, null, spy)
+        result = fbqm._freeWorkerSlots(0.99, 0.91, null)
+        expect(spy).to.have.been.called.with({cpuUsed: 0.99, memUsed: 0.91})
+        expect(result).to.equal 0
+
+      it 'uses most resource (cpu) to estimate how many more workers can support', ->
+        # per worker usages estimate = 0.5 / 10
+        # = 0.05
+        # Resouce left before overThreshold
+        # 0.9 - 0.5
+        # = 0.4
+        # 0.4 / 0.05
+        fbqm = new FirebaseQueuesManager(logger)
+        result = fbqm._freeWorkerSlots(0.5, 0, 10)
+        expect(result).to.equal 8
+
+      it 'uses most resource (memory) to estimate how many more workers can support', ->
+        fbqm = new FirebaseQueuesManager(logger)
+        result = fbqm._freeWorkerSlots(0, 0.5, 10)
+        expect(result).to.equal 8
+
+      it 'uses most resource (memory) to estimate how many more workers can support (high)', ->
+        # 0.8 / 200 = .004
+        # 0.9 - 0.8 = 0.1
+        # 0.1 / 0.004
+        # 25
+        fbqm = new FirebaseQueuesManager(logger)
+        result = fbqm._freeWorkerSlots(0, 0.8, 200)
+        expect(result).to.equal 25
+
+      it 'to estimate how many more workers can support round up', ->
+        fbqm = new FirebaseQueuesManager(logger)
+        result = fbqm._freeWorkerSlots(0.5, 0, 1)
+        expect(result).to.equal 1
+
+      it 'estimate how many more workers can support round down', ->
+        fbqm = new FirebaseQueuesManager(logger)
+        result = fbqm._freeWorkerSlots(0.8, 0, 1)
+        expect(result).to.equal 0
+
+      it 'calls thresholdReachedCB when freeslots is 0', ->
+        spy = chai.spy()
+        fbqm = new FirebaseQueuesManager(logger, null, null, null, spy)
+        result = fbqm._freeWorkerSlots(0.8, 0, 1)
+        expect(spy).to.have.been.called.with({cpuUsed: 0.8, memUsed: 0})
+        expect(result).to.equal 0
 
 
-#   _shouldIncreaseWorkers:  (pendingTasks, totWorkers, peakRcdTasksPS, avgProcTimePerTask, minWorkers) ->
-#     peakNeededWorkers = Math.floor(avgProcTimePerTask * peakRcdTasksPS)
-#     nowNeededWorkers = Math.floor(pendingTasks * avgProcTimePerTask)
-#     if nowNeededWorkers > totWorkers
-#       return Math.floor(nowNeededWorkers)
+    describe '_getQueueStats', ->
 
-#     if peakNeededWorkers > totWorkers
-#       return peakNeededWorkers
+      it 'calls @_canReduceWorkers with correct params', ->
+        mockQueue = getMockQueue(null, workerCount = 5)
+        mockMonitor =
+          getPendingTasksCount: -> 2
+          peakRcdTasksPS: -> 3
+          avgProcTimePerTask: -> 4
 
-#     return 0
-
-#   # aka free system resounces can support another ~x workers
-#   _freeWorkerSlots: (cpuUsed, memUsed, totWorkers) ->
-#     if cpuUsed > @cpuThreshold or memUsed > @memThreshold
-#       @thresholdReachedCB?({cpuUsed, memUsed})
-#       return -1
-
-#     mostUsedResource = Math.max(cpuUsed, memUsed)
-#     perWorkerUse = mostUsedResource / totWorkers
-
-#     freeResource = 1 - mostUsedResource
-#     freeSlots = freeResource / perWorkerUse
-#     return Math.floor(freeSlots)
+        fbqm = new FirebaseQueuesManager(logger)
+        spy = chai.spy.on(fbqm, '_canReduceWorkers')
+        fbqm.addQueue(mockQueue, mockMonitor)
+        result = fbqm._getQueueStats()
+        expect(spy).to.have.been.called.with.exactly(workerCount, 2, 4, 3, 1)
+        expect(result[0].canReduce).to.equal fbqm._canReduceWorkers(workerCount, 2, 4, 3, 1)
 
 
-# _getTotalWorkers: ->
-#     totWorkers = 0
-#     for managedQueue in @managedQueues
-#       totWorkers += managedQueue.queue.getWorkerCount()
+      it 'calls @_needsMoreWorkers with correct params', ->
+        mockQueue = getMockQueue(null, workerCount = 5)
+        mockMonitor =
+          getPendingTasksCount: -> 2
+          peakRcdTasksPS: -> 3
+          avgProcTimePerTask: -> 4
 
-#   _getTotalNeededWorkers: ->
-#     nWorkers = 0
-#     for managedQueue in @managedQueues
-#       pendingTasks = managedQueue.queueMonitor.getPendingTasksCount()
-#       totWorkers = managedQueue.queue.getWorkerCount()
-#       prtps = managedQueue.queueMonitor.peakRcdTasksPS()
-#       aptps = managedQueue.queueMonitor.avgProcTimePerTask()
-#       minWorkers = managedQueue.minWorkers
+        fbqm = new FirebaseQueuesManager(logger)
+        spy = chai.spy.on(fbqm, '_needsMoreWorkers')
+        fbqm.addQueue(mockQueue, mockMonitor)
+        result = fbqm._getQueueStats()
+        expect(spy).to.have.been.called.with.exactly(workerCount, 2, 4, 3)
+        expect(result[0].needIncrease).to.equal fbqm._needsMoreWorkers(workerCount, 2, 4, 3, 1)
 
-#       nWorker += @_shouldIncreaseWorkers(pendingTasks, totWorkers, prtps, aptps, minWorkers)
-#     return nWorkers
+      it 'calls @_couldUseMoreWorkers with correct params', ->
+        mockQueue = getMockQueue(null, workerCount = 5)
+        mockMonitor =
+          getPendingTasksCount: -> 2
+          peakRcdTasksPS: -> 3
+          avgProcTimePerTask: -> 4
 
-#   _freeUpWorkers: (neededWorkerCount) ->
-#     shutdownWorkers = []
-#     for managedQueue in @managedQueues
-#       pendingTasks = managedQueue.queueMonitor.getPendingTasksCount()
-#       totWorkers = managedQueue.getWorkerCount()
-#       prtps = managedQueue.queueMonitor.peakRcdTasksPS()
-#       aptps = managedQueue.queueMonitor.avgProcTimePerTask()
-#       minWorkers = managedQueue.minWorkers
+        fbqm = new FirebaseQueuesManager(logger)
+        spy = chai.spy.on(fbqm, '_couldUseMoreWorkers')
+        fbqm.addQueue(mockQueue, mockMonitor)
+        result = fbqm._getQueueStats()
+        expect(spy).to.have.been.called.with.exactly(workerCount, 2, 4, 3)
+        expect(result[0].optimalIncrease).to.equal fbqm._couldUseMoreWorkers(workerCount, 2, 4, 3, 1)
 
-#       removableWorkers = @_canReduceWorkers(pendingTasks, totWorkers, prtps, aptps, minWorkers)
-#       i = 0
-#       while i < removableWorkers
-#         if neededWorkerCount > 0
-#           shutdownWorkers.push managedQueue.removeWorker()
-#           neededWorkerCount--
+      it 'returns stat obj for each queue in order of priority', ->
+        mockQueue1 = getMockQueue('mockQueue1', workerCount = 5)
+        mockQueue2 = getMockQueue('mockQueue2', workerCount = 5)
+        mockMonitor = ->
+          getPendingTasksCount: -> 2
+          peakRcdTasksPS: -> 3
+          avgProcTimePerTask: -> 4
 
-#     return shutdownWorkers
+        fbqm = new FirebaseQueuesManager(logger)
+        fbqm.addQueue(mockQueue1, mockMonitor())
+        result = fbqm._getQueueStats()
+        expect(result.length).to.equal 1
+        fbqm.addQueue(mockQueue2, mockMonitor())
+        result = fbqm._getQueueStats()
+        expect(result[0].queue).to.equal mockQueue1
+        expect(result[1].queue).to.equal mockQueue2
 
-#   _allocateNewWorkers: (freeWorkerSlots) ->
-#     for managedQueue in @managedQueues
-#       unless freeWorkerSlots > 0
-#         break
+      it 'stat obj has queue attached', ->
+        mockQueue1 = getMockQueue('mockQueue1', workerCount = 5)
+        mockMonitor = ->
+          getPendingTasksCount: -> 2
+          peakRcdTasksPS: -> 3
+          avgProcTimePerTask: -> 4
 
-#       pendingTasks = managedQueue.queueMonitor.getPendingTasksCount()
-#       totWorkers = managedQueue.getWorkerCount()
-#       prtps = managedQueue.queueMonitor.peakRcdTasksPS()
-#       aptps = managedQueue.queueMonitor.avgProcTimePerTask()
-#       minWorkers = managedQueue.minWorkers
+        fbqm = new FirebaseQueuesManager(logger)
+        fbqm.addQueue(mockQueue1, mockMonitor())
+        result = fbqm._getQueueStats()
+        expect(result[0].queue).to.equal mockQueue1
 
-#       neededWorkers = @_shouldIncreaseWorkers(pendingTasks, totWorkers, prtps, aptps, minWorkers)
-#       i = 0
-#       while i < neededWorkers
-#         if freeWorkerSlots > 0
-#           managedQueue.addWorker()
-#           freeWorkerSlots--
 
+    describe '_sumTotalNeededWorkers', ->
+      it 'empty queueStats', ->
+        fbqm = new FirebaseQueuesManager(logger)
+        queueStats = fbqm._getQueueStats()
+        result = fbqm._sumTotalNeededWorkers(queueStats)
+        expect(result).to.equal 0
+
+      it 'single queue stat', ->
+        queueStat = {needIncrease: 1}
+        queueStats = [queueStat]
+        fbqm = new FirebaseQueuesManager(logger)
+        result = fbqm._sumTotalNeededWorkers(queueStats)
+        expect(result).to.equal 1
+
+      it 'multiple queue stats', ->
+        queueStat = {needIncrease: 1}
+        queueStat2 = {needIncrease: 2}
+        queueStat3 = {needIncrease: 3}
+        queueStats = [queueStat, queueStat2, queueStat3]
+        fbqm = new FirebaseQueuesManager(logger)
+        result = fbqm._sumTotalNeededWorkers(queueStats)
+        expect(result).to.equal 6
+
+    describe '_sumTotalOptimalWorkers', ->
+      it 'empty queueStats', ->
+        fbqm = new FirebaseQueuesManager(logger)
+        queueStats = fbqm._getQueueStats()
+        result = fbqm._sumTotalOptimalWorkers(queueStats)
+        expect(result).to.equal 0
+
+      it 'single queue stat', ->
+        queueStat = {optimalIncrease: 1}
+        queueStats = [queueStat]
+        fbqm = new FirebaseQueuesManager(logger)
+        result = fbqm._sumTotalOptimalWorkers(queueStats)
+        expect(result).to.equal 1
+
+      it 'multiple queue stats', ->
+        queueStat = {optimalIncrease: 1}
+        queueStat2 = {optimalIncrease: 2}
+        queueStat3 = {optimalIncrease: 4}
+        queueStats = [queueStat, queueStat2, queueStat3]
+        fbqm = new FirebaseQueuesManager(logger)
+        result = fbqm._sumTotalOptimalWorkers(queueStats)
+        expect(result).to.equal 7
+
+    describe '_freeUpWorkers', ->
+
+      it 'shuts down only neededWorkerCount', ->
+        spy = chai.spy()
+        mockQueue = {shutdownWorker: spy}
+        queueStat = {canReduce: 100, queue: mockQueue}
+        queueStats = [queueStat]
+        neededWorkerCount = 10
+        fbqm = new FirebaseQueuesManager(logger)
+        fbqm._freeUpWorkers(queueStats, neededWorkerCount)
+        expect(spy).to.have.been.called.exactly(10)
+
+      it 'shuts down only what each queue canReduce', ->
+        spy = chai.spy()
+        mockQueue = {shutdownWorker: spy}
+        queueStat = {canReduce: 8, queue: mockQueue}
+        queueStats = [queueStat]
+        neededWorkerCount = 100
+        fbqm = new FirebaseQueuesManager(logger)
+        fbqm._freeUpWorkers(queueStats, neededWorkerCount)
+        expect(spy).to.have.been.called.exactly(8)
+
+      it 'shuts down only what each queue canReduce multiple queues', ->
+        spy = chai.spy()
+        mockQueue = {shutdownWorker: spy}
+        queueStat = {canReduce: 8, queue: mockQueue}
+        queueStat2 = {canReduce: 8, queue: mockQueue}
+        queueStats = [queueStat, queueStat2]
+        neededWorkerCount = 100
+        fbqm = new FirebaseQueuesManager(logger)
+        fbqm._freeUpWorkers(queueStats, neededWorkerCount)
+        expect(spy).to.have.been.called.exactly(16)
+
+      it 'shuts down from lowest priority first', ->
+        # _freeUpWorkers expects queueStats to be ordered by priority
+        # so it reverses them to remove from lowest priority queues first
+        mockQueue1 = {shutdownWorker: chai.spy()}
+        mockQueue2 = {shutdownWorker: chai.spy()}
+        queueStat = {canReduce: 8, queue: mockQueue1}
+        queueStat2 = {canReduce: 8, queue: mockQueue2}
+        queueStats = [queueStat, queueStat2]
+        neededWorkerCount = 10
+        fbqm = new FirebaseQueuesManager(logger)
+        fbqm._freeUpWorkers(queueStats, neededWorkerCount)
+        expect(mockQueue1.shutdownWorker).to.have.been.called.exactly(2)
+        expect(mockQueue2.shutdownWorker).to.have.been.called.exactly(8)
+
+      it 'returns shutdown workers', ->
+                # _freeUpWorkers expects queueStats to be ordered by priority
+        # so it reverses them to remove from lowest priority queues first
+        i = 0
+        mockQueue1 = {shutdownWorker: chai.spy(-> return 'shutdownWorker' + i++)}
+
+        queueStat = {canReduce: 8, queue: mockQueue1}
+        queueStats = [queueStat]
+        neededWorkerCount = 10
+        fbqm = new FirebaseQueuesManager(logger)
+        results = fbqm._freeUpWorkers(queueStats, neededWorkerCount)
+        expect(mockQueue1.shutdownWorker).to.have.been.called.exactly(8)
+        y = 0
+        for result in results
+          expect(result).to.equal 'shutdownWorker' + y
+          y++
+
+
+    describe '_allocateNewWorkers', ->
+
+      it 'allocates optimalIncrease if it can', ->
+        queueStat = {optimalIncrease: -1}
+        queueStats = [queueStat]
+        fbqm = new FirebaseQueuesManager(logger)
+        freeWorkerSlots = 10
+        optimalWorkers = 9
+        fbqm._allocateNewWorkers(queueStats, freeWorkerSlots, optimalWorkers)
+        expect(queueStat.allocatedWorkers).to.equal -1
+
+
+      it 'allocates needIncrease if it has to', ->
+        queueStat = {needIncrease: -2}
+        queueStats = [queueStat]
+        fbqm = new FirebaseQueuesManager(logger)
+        freeWorkerSlots = 9
+        optimalWorkers = 10
+        fbqm._allocateNewWorkers(queueStats, freeWorkerSlots, optimalWorkers)
+        expect(queueStat.allocatedWorkers).to.equal -2
+
+      it 'addsWorkers upto needIncrease allocation', ->
+        mockQueue1 = {addWorker: chai.spy()}
+        queueStat = {needIncrease: 2, queue: mockQueue1}
+        queueStats = [queueStat]
+        freeWorkerSlots = 5
+        optimalWorkers = 10
+        fbqm = new FirebaseQueuesManager(logger)
+        fbqm._allocateNewWorkers(queueStats, freeWorkerSlots, optimalWorkers)
+        expect(mockQueue1.addWorker).to.have.been.called.exactly(2)
+
+      it 'addsWorkers upto needIncrease allocation', ->
+        mockQueue1 = {addWorker: chai.spy()}
+        queueStat = {optimalIncrease: 5, queue: mockQueue1}
+        queueStats = [queueStat]
+        freeWorkerSlots = 20
+        optimalWorkers = 10
+        fbqm = new FirebaseQueuesManager(logger)
+        fbqm._allocateNewWorkers(queueStats, freeWorkerSlots, optimalWorkers)
+        expect(mockQueue1.addWorker).to.have.been.called.exactly(queueStat.optimalIncrease)
+
+      it 'only allocates up to freeWorkerSlots', ->
+        mockQueue1 = {addWorker: chai.spy()}
+        queueStat = {needIncrease: 10, queue: mockQueue1}
+        queueStats = [queueStat]
+        freeWorkerSlots = 5
+        optimalWorkers = 10
+        fbqm = new FirebaseQueuesManager(logger)
+        fbqm._allocateNewWorkers(queueStats, freeWorkerSlots, optimalWorkers)
+        expect(mockQueue1.addWorker).to.have.been.called.exactly(freeWorkerSlots)
+
+      it 'addsWorkers upto freeWorkerSlots multiple queues', ->
+        mockQueue1 = {addWorker: chai.spy()}
+        mockQueue2 = {addWorker: chai.spy()}
+        queueStat1 = {needIncrease: 5, queue: mockQueue1}
+        queueStat2 = {needIncrease: 5, queue: mockQueue2}
+        queueStats = [queueStat1, queueStat2]
+        freeWorkerSlots = 8
+        optimalWorkers = 10
+        fbqm = new FirebaseQueuesManager(logger)
+        fbqm._allocateNewWorkers(queueStats, freeWorkerSlots, optimalWorkers)
+        expect(mockQueue1.addWorker).to.have.been.called.exactly(5)
+        expect(mockQueue2.addWorker).to.have.been.called.exactly(3)
+
+      it 'addsWorkers upto optimal allocation', ->
+        mockQueue1 = {addWorker: chai.spy()}
+        mockQueue2 = {addWorker: chai.spy()}
+        queueStat1 = {needIncrease: 5, optimalIncrease: 10, queue: mockQueue1}
+        queueStat2 = {needIncrease: 5, optimalIncrease: 10, queue: mockQueue2}
+        queueStats = [queueStat1, queueStat2]
+        freeWorkerSlots = 20
+        optimalWorkers = 20
+        fbqm = new FirebaseQueuesManager(logger)
+        fbqm._allocateNewWorkers(queueStats, freeWorkerSlots, optimalWorkers)
+        expect(mockQueue1.addWorker).to.have.been.called.exactly(10)
+        expect(mockQueue2.addWorker).to.have.been.called.exactly(10)
+
+
+
+    describe 'checkQueues', ->
+
+      it 'calls _freeWorkerSlots with osMonitor stats', ->
+        stats =
+          cpu: percent: 0.5
+          memory: percent: 0.5
+        osMonitorMock = {
+          getStats: -> Promise.resolve(stats)
+        }
+        fbqm = new FirebaseQueuesManager(logger, osMonitorMock)
+        expect(fbqm.osMonitor).to.equal osMonitorMock
+        spy = chai.spy.on(fbqm, '_freeWorkerSlots')
+        fbqm.checkQueues().then ->
+          expect(spy).to.be.called.with.exactly(0.5, 0.5, 0)
+
+
+
+
+  #   # This should be run on an interval
+  # checkQueues: ->
+  #   @osMonitor.getStats().then (stats) =>
+  #     usedCpuPercent = stats.cpu.percent
+  #     usedMemPercent = stats.memory.percent
+  #     freeWorkerSlots = @_freeWorkerSlots(usedCpuPercent, usedMemPercent, @_sumTotalWorkers())
+
+  #     queueStats = @_getQueueStats()
+  #     neededWorkers = @_sumTotalNeededWorkers(queueStats)
+  #     optimalWorkers = @_sumTotalOptimalWorkers(queueStats)
+
+  #     if neededWorkers > freeWorkerSlots
+  #       shutdownWorkerPromises = @_freeUpWorkers(neededWorkers-freeWorkerSlots)
+  #       for shutdownWorker in shutdownWorkerPromises
+  #         shutdownWorker.then =>
+  #           @checkQueues()
+
+  #     # Allocate what we can
+  #     if freeWorkerSlots > 0
+  #       @_allocateNewWorkers(queueStats, freeWorkerSlots, optimalWorkers)
