@@ -1,6 +1,6 @@
 FirebaseQueueTools = require.main.require 'src'
 Logger = FirebaseQueueTools.Logger
-logger = new Logger(Logger.ERROR)
+logger = new Logger(Logger.WARN)
 
 FirebaseQueueMonitor = FirebaseQueueTools.FirebaseQueueMonitor
 FirebaseQueuesManager = FirebaseQueueTools.FirebaseQueuesManager
@@ -501,20 +501,176 @@ describe 'FirebaseQueuesManager', ->
 
 
 
-    describe 'checkQueues', ->
+    describe.only 'checkQueues', ->
 
-      it 'calls _freeWorkerSlots with osMonitor stats', ->
-        stats =
-          cpu: percent: 0.5
-          memory: percent: 0.5
-        osMonitorMock = {
-          getStats: -> Promise.resolve(stats)
-        }
+      # it 'calls _freeWorkerSlots with osMonitor stats', ->
+      #   stats =
+      #     cpu: percent: 0.5
+      #     memory: percent: 0.5
+      #   osMonitorMock = {
+      #     getStats: -> Promise.resolve(stats)
+      #   }
+      #   fbqm = new FirebaseQueuesManager(logger, osMonitorMock)
+      #   expect(fbqm.osMonitor).to.equal osMonitorMock
+      #   spy = chai.spy.on(fbqm, '_freeWorkerSlots')
+      #   fbqm.checkQueues().then ->
+      #     expect(spy).to.be.called.with.exactly(0.5, 0.5, 0)
+
+
+      # it 'calls _freeUpWorkers when neededWorkers > freeWorkerSlots', ->
+      #   stats = cpu: {percent: null}, memory: {percent: null}
+
+      #   osMonitorMock = getStats: -> Promise.resolve(stats)
+      #   fbqm = new FirebaseQueuesManager(logger, osMonitorMock)
+      #   fbqm._freeWorkerSlots = -> return 0
+      #   fbqm._sumTotalNeededWorkers = -> return 10
+      #   _freeUpWorkersSpy = chai.spy(-> return [])
+      #   fbqm._freeUpWorkers = _freeUpWorkersSpy
+      #   fbqm.checkQueues().then ->
+      #     expect(_freeUpWorkersSpy).to.be.called.with.exactly([], 10)
+
+      # it 'calls _allocateNewWorkers when freeWorkerSlots', ->
+      #   stats = cpu: {percent: null}, memory: {percent: null}
+
+      #   osMonitorMock = getStats: -> Promise.resolve(stats)
+      #   fbqm = new FirebaseQueuesManager(logger, osMonitorMock)
+      #   fbqm._freeWorkerSlots = -> return 10
+      #   fbqm._sumTotalNeededWorkers = -> return 10
+      #   _allocateNewWorkersSpy = chai.spy(-> return [])
+      #   fbqm._allocateNewWorkers = _allocateNewWorkersSpy
+      #   fbqm.checkQueues().then ->
+      #     expect(_allocateNewWorkersSpy).to.be.called.with.exactly([], 10, 0)
+
+      # it 'calls checkQueues each time a worker shutsdown', ->
+      #   stats = cpu: {percent: null}, memory: {percent: null}
+
+      #   osMonitorMock = getStats: -> Promise.resolve(stats)
+      #   fbqm = new FirebaseQueuesManager(logger, osMonitorMock)
+      #   fbqm._freeWorkerSlots = -> return 0
+      #   fbqm._sumTotalNeededWorkers = -> return 2
+      #   # returns shutdownWorkerPromises
+      #   first = true
+      #   _freeUpWorkersSpy = chai.spy(
+      #     ->
+      #       if first
+      #         first = false
+      #         return [Promise.resolve(), Promise.resolve()]
+      #       return []
+      #   )
+
+      #   checkQueuesSpy = chai.spy.on(fbqm, 'checkQueues')
+      #   fbqm._freeUpWorkers = _freeUpWorkersSpy
+      #   fbqm.checkQueues().then ->
+      #     expect(_freeUpWorkersSpy).to.be.called.with.exactly([], 2)
+      #     # 3 = first call, + then once for each worker shutdown (2)
+      #     expect(checkQueuesSpy).to.be.called.exactly(3)
+
+      # it 'allocate up until cpu threshold', ->
+      #   mockQueue = (name) ->
+      #     workerCount = 1
+      #     tasksRef = {}
+      #     tasksRef.toString = -> return name
+      #     return {
+      #       tasksRef
+      #       getWorkerCount: -> return workerCount
+      #       addWorker: ->
+      #         workerCount++
+      #       shutdownWorker: -> workerCount--
+      #     }
+
+      #   mockMonitor = ->
+      #     getPendingTasksCount: -> 3
+      #     peakRcdTasksPS: -> 3
+      #     avgProcTimePerTask: -> 3
+
+      #   mockQueue1 = mockQueue('one')
+      #   mockQueue2 = mockQueue('two')
+
+      #   osMonitorMock = getStats: ->
+      #     perTaskCpu = 0.1
+      #     totalWorkers = mockQueue1.getWorkerCount() + mockQueue2.getWorkerCount()
+      #     stats = cpu: {percent: perTaskCpu * totalWorkers}, memory: {percent: null}
+      #     console.log 'total workers:', totalWorkers
+      #     console.log perTaskCpu * totalWorkers
+      #     return Promise.resolve(stats)
+
+      #   fbqm = new FirebaseQueuesManager(logger, osMonitorMock)
+      #   fbqm.addQueue mockQueue1, mockMonitor()
+      #   fbqm.addQueue mockQueue2, mockMonitor()
+      #   fbqm.checkQueues().then ->
+      #     expect(mockQueue1.getWorkerCount()).to.equal 8
+      #     expect(mockQueue2.getWorkerCount()).to.equal 1
+
+      it 're-allocate up until cpu threshold', ->
+        mockQueue = (name) ->
+          workerCount = 1
+          tasksRef = {}
+          tasksRef.toString = -> return name
+          return {
+            tasksRef
+            getWorkerCount: -> return workerCount
+            addWorker: -> workerCount++
+            shutdownWorker: -> workerCount--
+          }
+
+        mockMonitor = ->
+          getPendingTasksCount: -> 3
+          peakRcdTasksPS: -> 3
+          avgProcTimePerTask: -> 3
+
+        mockQueueCanReduce3 = (name) ->
+          workerCount = 3
+          tasksRef = {}
+          tasksRef.toString = -> return name
+          return {
+            tasksRef
+            getWorkerCount: -> return workerCount
+            addWorker: -> workerCount++
+            shutdownWorker: ->
+              workerCount--
+              Promise.resolve()
+
+          }
+
+        mockMonitorCanReduceThree = ->
+          getPendingTasksCount: -> 0
+          peakRcdTasksPS: -> 3
+          avgProcTimePerTask: -> 3
+
+        mockQueue1 = mockQueue('one')
+        mockQueue2 = mockQueue('two')
+        mockQueue3 = mockQueueCanReduce3('three')
+
+        osMonitorMock = getStats: ->
+          console.log 'getStats called'
+          perTaskCpu = 0.1
+          totalWorkers = mockQueue1.getWorkerCount() + mockQueue2.getWorkerCount() + mockQueue3.getWorkerCount()
+          cpuUse = (perTaskCpu * 10) * totalWorkers / 10
+          stats = cpu: {percent: cpuUse}, memory: {percent: null}
+          # console.log 'total workers:', totalWorkers
+          # console.log 'cpuUse: ', cpuUse
+
+          return stats
+
         fbqm = new FirebaseQueuesManager(logger, osMonitorMock)
-        expect(fbqm.osMonitor).to.equal osMonitorMock
-        spy = chai.spy.on(fbqm, '_freeWorkerSlots')
+        fbqm.addQueue mockQueue1, mockMonitor()
+        fbqm.addQueue mockQueue2, mockMonitor()
+        fbqm.addQueue mockQueue3, mockMonitorCanReduceThree()
         fbqm.checkQueues().then ->
-          expect(spy).to.be.called.with.exactly(0.5, 0.5, 0)
+          console.log "finished"
+          expect(mockQueue1.getWorkerCount()).to.equal 7
+          expect(mockQueue2.getWorkerCount()).to.equal 1
+          expect(mockQueue3.getWorkerCount()).to.equal 1
+
+
+
+
+
+
+
+
+
+
 
 
 

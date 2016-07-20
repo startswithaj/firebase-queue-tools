@@ -1,6 +1,7 @@
 assert = require 'assert'
+Bluebird = require 'bluebird'
 FirebaseQueueMonitor = require './FirebaseQueueMonitor'
-
+checkQueueCount = 0
 module.exports = class FirebaseQueuesManager
 
   ###*
@@ -38,25 +39,35 @@ module.exports = class FirebaseQueuesManager
       a.priority - b.priority
 
   # This should be run on an interval
-  checkQueues: ->
-    @osMonitor.getStats().then (stats) =>
-      usedCpuPercent = stats.cpu.percent
-      usedMemPercent = stats.memory.percent
-      freeWorkerSlots = @_freeWorkerSlots(usedCpuPercent, usedMemPercent, @_sumTotalWorkers())
+  checkQueues: (id) ->
+    @logger.log 'FirebaseQueuesManager.checkQueues'
+    console.log 'checkQueues', id
 
-      queueStats = @_getQueueStats()
-      neededWorkers = @_sumTotalNeededWorkers(queueStats)
-      optimalWorkers = @_sumTotalOptimalWorkers(queueStats)
+    stats = @osMonitor.getStats()
+    console.log 'getStats resolved', id
+    usedCpuPercent = stats.cpu.percent
+    usedMemPercent = stats.memory.percent
+    freeWorkerSlots = @_freeWorkerSlots(usedCpuPercent, usedMemPercent, @_sumTotalWorkers())
 
-      if neededWorkers > freeWorkerSlots
-        shutdownWorkerPromises = @_freeUpWorkers(neededWorkers-freeWorkerSlots)
-        for shutdownWorker in shutdownWorkerPromises
-          shutdownWorker.then =>
-            @checkQueues()
+    queueStats = @_getQueueStats()
+    neededWorkers = @_sumTotalNeededWorkers(queueStats)
+    optimalWorkers = @_sumTotalOptimalWorkers(queueStats)
 
-      # Allocate what we can
-      if freeWorkerSlots > 0
-        @_allocateNewWorkers(queueStats, freeWorkerSlots, optimalWorkers)
+    # Allocate what we can
+    if freeWorkerSlots > 0
+      @logger.log("FirebaseQueuesManager.checkQueues allocating #{freeWorkerSlots} worker slots")
+      @_allocateNewWorkers(queueStats, freeWorkerSlots, optimalWorkers)
+
+    if neededWorkers > freeWorkerSlots
+      @logger.log("FirebaseQueuesManager.checkQueues
+        neededWorkers:#{neededWorkers}, freeWorkerSlots:#{freeWorkerSlots}")
+      shutdownWorkerPromises = @_freeUpWorkers(queueStats, neededWorkers-freeWorkerSlots)
+      for shutdownWorker in shutdownWorkerPromises
+        shutdownWorker.then =>
+          console.log 'one shutdown complete'
+          @checkQueues(checkQueueCount++)
+
+    return Bluebird.all(shutdownWorkerPromises or [])
 
   _getQueueStats: ->
     queueStats = []
@@ -73,6 +84,9 @@ module.exports = class FirebaseQueuesManager
       queueStat.needIncrease = @_needsMoreWorkers(currentWorkerCount, pendingTasks, aptps, prtps)
       queueStat.optimalIncrease = @_couldUseMoreWorkers(currentWorkerCount, pendingTasks, aptps, prtps)
       queueStat.queue = managedQueue.queue
+      # console.log '^^^^^^^^^^^^^^^^^'
+      # console.log queueStat.canReduce
+      # console.log queueStat.needIncrease
       queueStats.push queueStat
 
     return queueStats
@@ -100,6 +114,7 @@ module.exports = class FirebaseQueuesManager
     return nWorkers
 
   _freeUpWorkers: (queueStats, neededWorkerCount) ->
+
     shutdownWorkerPromises = []
 
     # queue stats are ordered by priority highest to lowest
@@ -108,6 +123,7 @@ module.exports = class FirebaseQueuesManager
       workersToRemove = queueStat.canReduce
       i = 0
       while i < workersToRemove and neededWorkerCount > 0
+        console.log 'shutting down 1 worker'
         shutdownWorkerPromises.push queueStat.queue.shutdownWorker()
         neededWorkerCount--
         i++
@@ -124,6 +140,7 @@ module.exports = class FirebaseQueuesManager
     for stats in queueStats
       i = 0
       while i < stats.allocatedWorkers and freeWorkerSlots > 0
+        console.log 'adding 1 worker'
         stats.queue.addWorker()
         freeWorkerSlots--
         i++
@@ -144,7 +161,8 @@ module.exports = class FirebaseQueuesManager
     if freeSlots < 1
       @thresholdReachedCB?({cpuUsed, memUsed})
       return 0
-
+    console.log 'freeslot:', freeSlots
+    debugger
     return freeSlots
 
   _canReduceWorkers: (currentWorkerCount, pendingTasks, avgProcTimePerTask, peakRcdTasksPS, minWorkers) ->
@@ -152,7 +170,7 @@ module.exports = class FirebaseQueuesManager
       return 0
 
     if currentWorkerCount > (pendingTasks*avgProcTimePerTask)
-      return currentWorkerCount - Math.floor(pendingTasks*avgProcTimePerTask)
+      return (currentWorkerCount - Math.floor(pendingTasks*avgProcTimePerTask)) - minWorkers
 
     return 0
 
