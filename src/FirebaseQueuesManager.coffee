@@ -1,3 +1,4 @@
+assert = require 'assert'
 FirebaseQueueMonitor = require './FirebaseQueueMonitor'
 
 module.exports = class FirebaseQueuesManager
@@ -10,24 +11,29 @@ module.exports = class FirebaseQueuesManager
    * @return {Float}  memThreshold - will stop creating workers once this is reached (0.7 = 70%)
    * @return {FirebaseQueuesManager}
   ###
-  constructor: (@logger, @osMonitor, @cpuThreshold = 0.9, @memThreshold = 0.9) ->
+  constructor: (@logger, @osMonitor, @cpuThreshold = 0.9, @memThreshold = 0.9, @thresholdReachedCB) ->
     @logger ?= console
-    @managedQueues = {}
 
-  addQueue: (queue, queueMonitor, minWorkers) ->
-    queuePath = queue.tasksRef?.toString()
+    @managedQueues = []
 
-    unless queuePath
-      throw new Error('Invalid Queue')
-    if @queues[queuePath]
-      throw new Error('Already Managing that queue')
+  addQueue: (queue, queueMonitor, minWorkers = 1, priority) ->
+    assert queue, 'FirebaseQueuesManager.addQueue requires Queue param'
+    assert queue.tasksRef, 'FirebaseQueuesManager.addQueue must have tasksRef on queue'
 
-    queueMonitor ?= new QueueMonitor(queue)
-    @managedQueues[queueRef.toString()] = {
+    queuePath = queue.tasksRef.toString()
+
+    assert !@managedQueues[queuePath], 'FirebaseQueuesManager.addQueue Already Managing that queue'
+
+    queueMonitor ?= new FirebaseQueueMonitor(queue, null, @logger)
+    @managedQueues.push {
       queue
       queueMonitor
       minWorkers
+      priority: priority or @managedQueues.length
     }
+
+    @managedQueues.sort (a, b) ->
+      a.priority - b.priority
 
   # This should be run on an interval
   checkQueues: ->
@@ -36,7 +42,10 @@ module.exports = class FirebaseQueuesManager
       usedMemPercent = stats.memory.percent
       freeWorkerSlots = @_freeWorkerSlots(usedCpuPercent, usedMemPercent, @_getTotalWorkers())
 
-      neededWorkers = @_getTotalNeededWorkers()
+      queueStats = @_getQueueStats()
+      neededWorkers = @_getTotalNeededWorkers(queueStats)
+      optimalWorkers = @_getTotalOptimalWorkers(queueStats)
+
       if neededWorkers > freeWorkerSlots
         shutdownWorkers = @_freeUpWorkers(neededWorkers-freeWorkerSlots)
         for shutdownWorker in shutdownWorkers
@@ -45,92 +54,149 @@ module.exports = class FirebaseQueuesManager
 
       # Allocate what we can
       if freeWorkerSlots > 0
-        @_allocateNewWorkers(freeWorkerSlots)
+        @_allocateNewWorkers(queueStats, freeWorkerSlots, totalNeeded, optimalWorkers)
+
+  _getQueueStats: ->
+    queueStats = []
+    for managedQueue in @managedQueues
+      queueStat = {}
+
+      pendingTasks = managedQueue.queueMonitor.getPendingTasksCount()
+      currentWorkerCount = managedQueue.getWorkerCount()
+      prtps = managedQueue.queueMonitor.peakRcdTasksPS()
+      aptps = managedQueue.queueMonitor.avgProcTimePerTask()
+      minWorkers = managedQueue.minWorkers
+
+      queueStat.canReduce = @_canReduceWorkers(pendingTasks, currentWorkerCount, prtps, aptps, minWorkers)
+      queueStat.needIncrease = @_needsMoreWorkers(pendingTasks, currentWorkerCount, prtps, aptps)
+      queueStat.optimalIncrease = @_couldUseMoreWorkers(pendingTasks, currentWorkerCount, prtps, aptps)
+      queueStat.queue = managedQueue.queue
+      queueStats.push queueStat
+
+    return queueStats
 
   _getTotalWorkers: ->
-    totWorkers = 0
-    for managedQueue in @managedQueues
-      totWorkers += managedQueue.queue.getWorkerCount()
+    currentWorkerCount = 0
 
-  _getTotalNeededWorkers: ->
+    for queuePath, managedQueue of @managedQueues
+      currentWorkerCount += managedQueue.queue.getWorkerCount()
+
+    return currentWorkerCount
+
+  _getTotalNeededWorkers: (queueStats) ->
     nWorkers = 0
-    for managedQueue in @managedQueues
-      pendingTasks = managedQueue.queueMonitor.getPendingTasksCount()
-      totWorkers = managedQueue.queue.getWorkerCount()
-      prtps = managedQueue.queueMonitor.peakRcdTasksPS()
-      aptps = managedQueue.queueMonitor.avgProcTimePerTask()
-      minWorkers = managedQueue.minWorkers
+    for stats in queueStats
+      nWorker += stats.needIncrease
 
-      nWorker += @_shouldIncreaseWorkers(pendingTasks, totWorkers, prtps, aptps, minWorkers)
     return nWorkers
 
-  _freeUpWorkers: (neededWorkerCount) ->
-    shutdownWorkers = []
-    for managedQueue in @managedQueues
-      pendingTasks = managedQueue.queueMonitor.getPendingTasksCount()
-      totWorkers = managedQueue.getWorkerCount()
-      prtps = managedQueue.queueMonitor.peakRcdTasksPS()
-      aptps = managedQueue.queueMonitor.avgProcTimePerTask()
-      minWorkers = managedQueue.minWorkers
+  _getTotalOptimalWorkers: (queueStats) ->
+    nWorkers = 0
+    for stats in queueStats
+      nWorker += stats.optimalIncrease
 
-      removableWorkers = @_canReduceWorkers(pendingTasks, totWorkers, prtps, aptps, minWorkers)
-      i = 0
-      while i < removableWorkers
-        if neededWorkerCount > 0
-          shutdownWorkers.push managedQueue.removeWorker()
-          neededWorkerCount--
+    return nWorkers
+
+  _freeUpWorkers: (queueStats, neededWorkerCount) ->
+    shutdownWorkers = []
+    sumRemovableWorkers = 0
+    numberOfQueues = Object.keys(@managedQueues).length
+
+    for stats in queueStats
+      sumRemovableWorkers += stats.canReduce
+
+    moreThanEnough = sumRemovableWorkers > neededWorkerCount
+
+    for queuePath, managedQueue of @managedQueues
+
+      workersToRemove = queueStats[queuePath]
+      if workersToRemove > 0 and neededWorkerCount > 0
+        if moreThanEnough
+          # if this queue has 30% of the free workers take 30% of the needed workers from them
+          workersToRemove = @_getShareOfRemovableWorkers(sumRemovableWorkers, workersToRemove, neededWorkerCount)
+
+          i = 0
+          while i < workersToRemove and neededWorkerCount > 0
+            i++
+            shutdownWorkers.push managedQueue.removeWorker()
+            neededWorkerCount--
 
     return shutdownWorkers
 
-  _allocateNewWorkers: (freeWorkerSlots) ->
-    for managedQueue in @managedQueues
-      unless freeWorkerSlots > 0
-        break
+  _getShareOfRemovableWorkers: (sumRemovableWorkers, removableWorkers, neededWorkerCount) ->
+    shareToShutdown = (removableWorkers / sumRemovableWorkers) * neededWorkerCount
+    shareToShutdown = Math.ceil(shareToShutdown)
 
-      pendingTasks = managedQueue.queueMonitor.getPendingTasksCount()
-      totWorkers = managedQueue.getWorkerCount()
-      prtps = managedQueue.queueMonitor.peakRcdTasksPS()
-      aptps = managedQueue.queueMonitor.avgProcTimePerTask()
-      minWorkers = managedQueue.minWorkers
+  _allocateNewWorkers: (queueStats, freeWorkerSlots, totalNeeded, optimalWorkers) ->
+    allocations = []
+    allocatedSum = 0
+    for queuePath, stats of queueStats
+      if freeWorkerSlots > optimalWorkers
+        stats.allocatedWorkers = stats.optimalIncrease
+      else if freeWorkerSlots > totalNeeded
+        stats.allocatedWorkers = stats.needIncrease
+      else
+        neededWorkers = stats.needIncrease
+        stats.allocatedWorkers = @_getAllocationShare(freeWorkerSlots, neededWorkers, totalNeeded)
+        allocatedSum += stats.allocatedWorkers
 
-      neededWorkers = @_shouldIncreaseWorkers(pendingTasks, totWorkers, prtps, aptps, minWorkers)
+    # Because we Math.floor the allocation share we want to use up the remainder
+    if totalNeeded > freeWorkerSlots and allocatedSum < freeWorkerSlots
+      sortedQueueStatsArray = Object.values(queueStats).sort (a, b) ->
+        a.needIncrease - b.needIncrease
+
+      while allocatedSum < freeWorkerSlots
+        stats = sortedQueueStatsArray.shift()
+        stats.allocatedWorkers++
+        allocatedSum++
+        sortedQueueStatsArray.push stats
+
+    assert allocatedSum <= freeWorkerSlots, '_allocateNewWorkers: allocatedSum must be less than freeWorkerSlots'
+
+    for queuePath, managedQueue of @managedQueue
+      allocatedWorkers = queueStats[queuePath].allocatedWorkers
       i = 0
-      while i < neededWorkers
-        if freeWorkerSlots > 0
-          managedQueue.addWorker()
-          freeWorkerSlots--
+      while i < allocatedWorkers
+        managedQueue.queue.addWorker()
+        i++
 
-  _canReduceWorkers: (pendingTasks, totWorkers, peakRcdTasksPS, avgProcTimePerTask, minWorkers) ->
-    if totWorkers <= minWorkers
+  _getAllocationShare: (freeWorkerSlots, qNeededWorkers, totalNeeded) ->
+    Math.floor((qNeededWorkers / totalNeeded) * freeWorkerSlots)
+
+
+  _canReduceWorkers: (pendingTasks, currentWorkerCount, peakRcdTasksPS, avgProcTimePerTask, minWorkers) ->
+    if currentWorkerCount <= minWorkers
       return 0
 
-    if totWorkers > (pendingTasks*avgProcTimePerTask)
-      return Math.floor(pendingTasks*avgProcTimePerTask)
+    if currentWorkerCount > (pendingTasks*avgProcTimePerTask)
+      return currentWorkerCount - Math.floor(pendingTasks*avgProcTimePerTask)
 
     return 0
 
-  _shouldIncreaseWorkers:  (pendingTasks, totWorkers, peakRcdTasksPS, avgProcTimePerTask, minWorkers) ->
-    peakNeededWorkers = Math.floor(avgProcTimePerTask * peakRcdTasksPS)
+  _needsMoreWorkers:  (pendingTasks, currentWorkerCount, peakRcdTasksPS, avgProcTimePerTask) ->
     nowNeededWorkers = Math.floor(pendingTasks * avgProcTimePerTask)
-    if nowNeededWorkers > totWorkers
-      return Math.floor(nowNeededWorkers)
+    if nowNeededWorkers > currentWorkerCount
+      return nowNeededWorkers - currentWorkerCount
 
-    if peakNeededWorkers > totWorkers
-      return peakNeededWorkers
+    return 0
+
+  _couldUseMoreWorkers: (pendingTasks, currentWorkerCount, peakRcdTasksPS, avgProcTimePerTask) ->
+    peakNeededWorkers = Math.floor(avgProcTimePerTask * peakRcdTasksPS)
+
+    if peakNeededWorkers > currentWorkerCount
+      return peakNeededWorkers - currentWorkerCount
 
     return 0
 
   # aka free system resounces can support another ~x workers
-  _freeWorkerSlots: (cpuUsed, memUsed, totWorkers) ->
+  _freeWorkerSlots: (cpuUsed, memUsed, currentWorkerCount) ->
     if cpuUsed > @cpuThreshold or memUsed > @memThreshold
-      @resourceThresholdReachedCB({cpuUsed, memUsed})
+      @thresholdReachedCB?({cpuUsed, memUsed})
       return -1
 
     mostUsedResource = Math.max(cpuUsed, memUsed)
-    perWorkerUse = mostUsedResource / totWorkers
+    perWorkerUse = mostUsedResource / currentWorkerCount
 
     freeResource = 1 - mostUsedResource
     freeSlots = freeResource / perWorkerUse
     return Math.floor(freeSlots)
-
-

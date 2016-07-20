@@ -1,149 +1,182 @@
-# FirebaseQueuesManager = require.main.require 'src/FirebaseQueuesManager'
-# EventEmitter = require 'events'
+FirebaseQueueTools = require.main.require 'src'
+Logger = FirebaseQueueTools.Logger
+logger = new Logger(Logger.ERROR)
 
+FirebaseQueueMonitor = FirebaseQueueTools.FirebaseQueueMonitor
+FirebaseQueuesManager = FirebaseQueueTools.FirebaseQueuesManager
+EventEmitter = require 'events'
 # key = 'randomkey12323'
+getMockQueue = (name, workerCount) ->
+  tasksRef = new EventEmitter()
+  tasksRef.toString = -> return name or 'mockQueuePath'
 
-# describe.only 'FirebaseQueuesManager', ->
-#   mockTasksRef = null
-#   firebaseQueueManager = null
-#   beforeEach ->
-#     mockTasksRef = new EventEmitter()
-#     firebaseQueueManager = new FirebaseQueuesManager()
+  tasksRef: tasksRef
+  getWorkerCount: -> return workerCount
 
 
-FirebaseQueueMonitor = require './FirebaseQueueMonitor'
 
-module.exports = class FirebaseQueuesManager
+describe.only 'FirebaseQueuesManager', ->
+  it 'Constructor', ->
+    fbqm = new FirebaseQueuesManager()
+    expect(fbqm.logger).not.to.be.undefined
+    expect(fbqm.managedQueues).not.to.be.undefined
 
-  ###*
-   * @param  {Logger}    logger - logger object defaults to console
-   * @param  {osMonitor} osMonitor - Monitors and reports cpu and memory usuage
-   * @param  {funcition} thresholdReachedCB - Callback that will be called if we hit the cpu or memory thresholds
-   * @param  {Float}  cpuThreshold - will stop creating workers once this is reached (0.9 = 90%)
-   * @return {Float}  memThreshold - will stop creating workers once this is reached (0.7 = 70%)
-   * @return {FirebaseQueuesManager}
-  ###
-  constructor: (@logger, @osMonitor, @cpuThreshold = 0.9, @memThreshold = 0.9) ->
-    @logger ?= console
-    @managedQueues = {}
+  describe 'Methods', ->
 
-  addQueue: (queue, queueMonitor, minWorkers) ->
-    queuePath = queue.tasksRef?.toString()
+    describe 'addQueue', ->
+      it 'throw when no queue', ->
+        fbqm = new FirebaseQueuesManager()
+        expect(-> fbqm.addQueue()).to.throw('AssertionError: FirebaseQueuesManager.addQueue requires Queue param')
 
-    unless queuePath
-      throw new Error('Invalid Queue')
-    if @queues[queuePath]
-      throw new Error('Already Managing that queue')
+      it 'throw invalid when no tasksRef', ->
+        fbqm = new FirebaseQueuesManager(logger)
+        expect(-> fbqm.addQueue({})).to.throw(
+          'AssertionError: FirebaseQueuesManager.addQueue must have tasksRef on queue'
+        )
 
-    queueMonitor ?= new QueueMonitor(queue)
-    @managedQueues[queueRef.toString()] = {
-      queue
-      queueMonitor
-      minWorkers
-    }
+      it 'rejects duplicate queues', ->
+        mockQueue = getMockQueue()
+        fbqm = new FirebaseQueuesManager(logger)
+        fbqm.addQueue(mockQueue)
+        expect(-> fbqm.addQueue(mockQueue)).to.throw('
+          AssertionError: FirebaseQueuesManager.addQueue Already Managing that queue'
+        )
 
-  # This should be run on an interval
-  checkQueues: ->
-    @osMonitor.getStats().then (stats) =>
-      usedCpuPercent = stats.cpu.percent
-      usedMemPercent = stats.memory.percent
-      freeWorkerSlots = @_freeWorkerSlots(usedCpuPercent, usedMemPercent, @_getTotalWorkers())
+      it 'adds a managedQueue', ->
+        mockQueue = getMockQueue()
+        fbqm = new FirebaseQueuesManager(logger)
+        fbqm.addQueue(mockQueue)
 
-      neededWorkers = @_getTotalNeededWorkers()
-      if neededWorkers > freeWorkerSlots
-        shutdownWorkers = @_freeUpWorkers(neededWorkers-freeWorkerSlots)
-        for shutdownWorker in shutdownWorkers
-          shutdownWorker.then =>
-            @checkQueues()
+        expect(fbqm.managedQueues['mockQueuePath']).not.to.be.undefined
+        managedQueue = fbqm.managedQueues['mockQueuePath']
+        expect(managedQueue.queue).to.equal mockQueue
+        expect(managedQueue.queueMonitor).to.be.instanceof FirebaseQueueMonitor
+        expect(managedQueue.minWorkers).to.equal 1
 
-      # Allocate what we can
-      if freeWorkerSlots > 0
-        @_allocateNewWorkers(freeWorkerSlots)
+      it 'uses queueMonitor param if it exists', ->
+        mockQueue = getMockQueue()
+        mockMonitor = {}
+        fbqm = new FirebaseQueuesManager(logger)
+        fbqm.addQueue(mockQueue, mockMonitor)
+        expect(fbqm.managedQueues['mockQueuePath']).not.to.be.undefined
+        managedQueue = fbqm.managedQueues['mockQueuePath']
+        expect(managedQueue.queue).to.equal mockQueue
+        expect(managedQueue.queueMonitor).to.equal mockMonitor
+        expect(managedQueue.minWorkers).to.equal 1
 
-  _getTotalWorkers: ->
-    totWorkers = 0
-    for managedQueue in @managedQueues
-      totWorkers += managedQueue.queue.getWorkerCount()
+      it '_getTotalWorkers', ->
+        fbqm = new FirebaseQueuesManager(logger)
+        fbqm.addQueue mockQueue1 = getMockQueue('1', 1)
+        fbqm.addQueue mockQueue2 = getMockQueue('2', 2)
+        expect(mockQueue1.getWorkerCount()).to.equal 1
+        expect(fbqm._getTotalWorkers()).to.equal 3
+        fbqm.addQueue mockQueue2 = getMockQueue('3', 3)
+        expect(fbqm._getTotalWorkers()).to.equal 6
 
-  _getTotalNeededWorkers: ->
-    nWorkers = 0
-    for managedQueue in @managedQueues
-      pendingTasks = managedQueue.queueMonitor.getPendingTasksCount()
-      totWorkers = managedQueue.queue.getWorkerCount()
-      prtps = managedQueue.queueMonitor.peakRcdTasksPS()
-      aptps = managedQueue.queueMonitor.avgProcTimePerTask()
-      minWorkers = managedQueue.minWorkers
+      describe '_canReduceWorkers', ->
 
-      nWorker += @_shouldIncreaseWorkers(pendingTasks, totWorkers, prtps, aptps, minWorkers)
-    return nWorkers
+        it 'wont allow less than minWorkers', ->
+          fbqm = new FirebaseQueuesManager(logger)
+          result = fbqm._canReduceWorkers(null, 3, null, null, 3)
+          expect(result).to.equal 0
+          result = fbqm._canReduceWorkers(null, 2, null, null, 3)
+          expect(result).to.equal 0
 
-  _freeUpWorkers: (neededWorkerCount) ->
-    shutdownWorkers = []
-    for managedQueue in @managedQueues
-      pendingTasks = managedQueue.queueMonitor.getPendingTasksCount()
-      totWorkers = managedQueue.getWorkerCount()
-      prtps = managedQueue.queueMonitor.peakRcdTasksPS()
-      aptps = managedQueue.queueMonitor.avgProcTimePerTask()
-      minWorkers = managedQueue.minWorkers
+        it 'returns difference between currently needed workers and totWorkers', ->
+          fbqm = new FirebaseQueuesManager(logger)
+          # 3 tasks pending * averageSpeed of 3 seconds per tasks means we need 9 workers if thats the current rate
+          result = fbqm._canReduceWorkers(3, 12, null, 3, null)
+          expect(result).to.equal 3
 
-      removableWorkers = @_canReduceWorkers(pendingTasks, totWorkers, prtps, aptps, minWorkers)
-      i = 0
-      while i < removableWorkers
-        if neededWorkerCount > 0
-          shutdownWorkers.push managedQueue.removeWorker()
-          neededWorkerCount--
+        it 'returns 0 if tot workers < needed workers', ->
+          fbqm = new FirebaseQueuesManager(logger)
+          # 3 tasks pending * averageSpeed of 3 seconds per tasks means we need 9 workers if thats the current rate
+          result = fbqm._canReduceWorkers(3, 5, null, 3, null)
+          expect(result).to.equal 0
 
-    return shutdownWorkers
+      describe '_shouldIncreaseWorkers', ->
 
-  _allocateNewWorkers: (freeWorkerSlots) ->
-    for managedQueue in @managedQueues
-      unless freeWorkerSlots > 0
-        break
+        it 'returns number or workers to handle current load', ->
+          fbqm = new FirebaseQueuesManager(logger)
+          result = fbqm._shouldIncreaseWorkers(3, 6, null, 3, null)
+          expect(result).to.equal 3
 
-      pendingTasks = managedQueue.queueMonitor.getPendingTasksCount()
-      totWorkers = managedQueue.getWorkerCount()
-      prtps = managedQueue.queueMonitor.peakRcdTasksPS()
-      aptps = managedQueue.queueMonitor.avgProcTimePerTask()
-      minWorkers = managedQueue.minWorkers
 
-      neededWorkers = @_shouldIncreaseWorkers(pendingTasks, totWorkers, prtps, aptps, minWorkers)
-      i = 0
-      while i < neededWorkers
-        if freeWorkerSlots > 0
-          managedQueue.addWorker()
-          freeWorkerSlots--
+#   _shouldIncreaseWorkers:  (pendingTasks, totWorkers, peakRcdTasksPS, avgProcTimePerTask, minWorkers) ->
+#     peakNeededWorkers = Math.floor(avgProcTimePerTask * peakRcdTasksPS)
+#     nowNeededWorkers = Math.floor(pendingTasks * avgProcTimePerTask)
+#     if nowNeededWorkers > totWorkers
+#       return Math.floor(nowNeededWorkers)
 
-  _canReduceWorkers: (pendingTasks, totWorkers, peakRcdTasksPS, avgProcTimePerTask, minWorkers) ->
-    if totWorkers <= minWorkers
-      return 0
+#     if peakNeededWorkers > totWorkers
+#       return peakNeededWorkers
 
-    if totWorkers > (pendingTasks*avgProcTimePerTask)
-      return Math.floor(pendingTasks*avgProcTimePerTask)
+#     return 0
 
-    return 0
+#   # aka free system resounces can support another ~x workers
+#   _freeWorkerSlots: (cpuUsed, memUsed, totWorkers) ->
+#     if cpuUsed > @cpuThreshold or memUsed > @memThreshold
+#       @thresholdReachedCB?({cpuUsed, memUsed})
+#       return -1
 
-  _shouldIncreaseWorkers:  (pendingTasks, totWorkers, peakRcdTasksPS, avgProcTimePerTask, minWorkers) ->
-    peakNeededWorkers = Math.floor(avgProcTimePerTask * peakRcdTasksPS)
-    nowNeededWorkers = Math.floor(pendingTasks * avgProcTimePerTask)
-    if nowNeededWorkers > totWorkers
-      return Math.floor(nowNeededWorkers)
+#     mostUsedResource = Math.max(cpuUsed, memUsed)
+#     perWorkerUse = mostUsedResource / totWorkers
 
-    if peakNeededWorkers > totWorkers
-      return peakNeededWorkers
+#     freeResource = 1 - mostUsedResource
+#     freeSlots = freeResource / perWorkerUse
+#     return Math.floor(freeSlots)
 
-    return 0
 
-  # aka free system resounces can support another ~x workers
-  _freeWorkerSlots: (cpuUsed, memUsed, totWorkers) ->
-    if cpuUsed > @cpuThreshold or memUsed > @memThreshold
-      @resourceThresholdReachedCB({cpuUsed, memUsed})
-      return -1
+# _getTotalWorkers: ->
+#     totWorkers = 0
+#     for managedQueue in @managedQueues
+#       totWorkers += managedQueue.queue.getWorkerCount()
 
-    mostUsedResource = Math.max(cpuUsed, memUsed)
-    perWorkerUse = mostUsedResource / totWorkers
+#   _getTotalNeededWorkers: ->
+#     nWorkers = 0
+#     for managedQueue in @managedQueues
+#       pendingTasks = managedQueue.queueMonitor.getPendingTasksCount()
+#       totWorkers = managedQueue.queue.getWorkerCount()
+#       prtps = managedQueue.queueMonitor.peakRcdTasksPS()
+#       aptps = managedQueue.queueMonitor.avgProcTimePerTask()
+#       minWorkers = managedQueue.minWorkers
 
-    freeResource = 1 - mostUsedResource
-    freeSlots = freeResource / perWorkerUse
-    return Math.floor(freeSlots)
+#       nWorker += @_shouldIncreaseWorkers(pendingTasks, totWorkers, prtps, aptps, minWorkers)
+#     return nWorkers
 
+#   _freeUpWorkers: (neededWorkerCount) ->
+#     shutdownWorkers = []
+#     for managedQueue in @managedQueues
+#       pendingTasks = managedQueue.queueMonitor.getPendingTasksCount()
+#       totWorkers = managedQueue.getWorkerCount()
+#       prtps = managedQueue.queueMonitor.peakRcdTasksPS()
+#       aptps = managedQueue.queueMonitor.avgProcTimePerTask()
+#       minWorkers = managedQueue.minWorkers
+
+#       removableWorkers = @_canReduceWorkers(pendingTasks, totWorkers, prtps, aptps, minWorkers)
+#       i = 0
+#       while i < removableWorkers
+#         if neededWorkerCount > 0
+#           shutdownWorkers.push managedQueue.removeWorker()
+#           neededWorkerCount--
+
+#     return shutdownWorkers
+
+#   _allocateNewWorkers: (freeWorkerSlots) ->
+#     for managedQueue in @managedQueues
+#       unless freeWorkerSlots > 0
+#         break
+
+#       pendingTasks = managedQueue.queueMonitor.getPendingTasksCount()
+#       totWorkers = managedQueue.getWorkerCount()
+#       prtps = managedQueue.queueMonitor.peakRcdTasksPS()
+#       aptps = managedQueue.queueMonitor.avgProcTimePerTask()
+#       minWorkers = managedQueue.minWorkers
+
+#       neededWorkers = @_shouldIncreaseWorkers(pendingTasks, totWorkers, prtps, aptps, minWorkers)
+#       i = 0
+#       while i < neededWorkers
+#         if freeWorkerSlots > 0
+#           managedQueue.addWorker()
+#           freeWorkerSlots--
 
