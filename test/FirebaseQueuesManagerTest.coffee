@@ -1,19 +1,20 @@
-FirebaseQueueTools = require.main.require 'src'
-Logger = FirebaseQueueTools.Logger
-logger = new Logger(Logger.LOG)
-
+EventEmitter = require 'events'
 Bluebird = require 'bluebird'
+
+FirebaseQueueTools = require.main.require 'src'
+
+Logger = FirebaseQueueTools.Logger
+logger = new Logger(Logger.WARN)
+
 FirebaseQueueMonitor = FirebaseQueueTools.FirebaseQueueMonitor
 FirebaseQueuesManager = FirebaseQueueTools.FirebaseQueuesManager
-EventEmitter = require 'events'
-# key = 'randomkey12323'
+
 getMockQueue = (name, workerCount) ->
   tasksRef = new EventEmitter()
   tasksRef.toString = -> return name or 'mockQueuePath'
 
   tasksRef: tasksRef
   getWorkerCount: -> return workerCount
-
 
 
 describe 'FirebaseQueuesManager', ->
@@ -253,7 +254,6 @@ describe 'FirebaseQueuesManager', ->
         expect(spy).to.have.been.called.with.exactly(workerCount, 2, 4, 3, 1)
         expect(result[0].canReduce).to.equal fbqm._canReduceWorkers(workerCount, 2, 4, 3, 1)
 
-
       it 'calls @_needsMoreWorkers with correct params', ->
         mockQueue = getMockQueue(null, workerCount = 5)
         mockMonitor =
@@ -285,29 +285,29 @@ describe 'FirebaseQueuesManager', ->
       it 'returns stat obj for each queue in order of priority', ->
         mockQueue1 = getMockQueue('mockQueue1', workerCount = 5)
         mockQueue2 = getMockQueue('mockQueue2', workerCount = 5)
-        mockMonitor = ->
+        MockMonitor = ->
           getPendingTasksCount: -> 2
           peakRcdTasksPS: -> 3
           avgProcTimePerTask: -> 4
 
         fbqm = new FirebaseQueuesManager(logger)
-        fbqm.addQueue(mockQueue1, mockMonitor())
+        fbqm.addQueue(mockQueue1, MockMonitor())
         result = fbqm._getQueueStats()
         expect(result.length).to.equal 1
-        fbqm.addQueue(mockQueue2, mockMonitor())
+        fbqm.addQueue(mockQueue2, MockMonitor())
         result = fbqm._getQueueStats()
         expect(result[0].queue).to.equal mockQueue1
         expect(result[1].queue).to.equal mockQueue2
 
       it 'stat obj has queue attached', ->
         mockQueue1 = getMockQueue('mockQueue1', workerCount = 5)
-        mockMonitor = ->
+        MockMonitor = ->
           getPendingTasksCount: -> 2
           peakRcdTasksPS: -> 3
           avgProcTimePerTask: -> 4
 
         fbqm = new FirebaseQueuesManager(logger)
-        fbqm.addQueue(mockQueue1, mockMonitor())
+        fbqm.addQueue(mockQueue1, MockMonitor())
         result = fbqm._getQueueStats()
         expect(result[0].queue).to.equal mockQueue1
 
@@ -434,7 +434,6 @@ describe 'FirebaseQueuesManager', ->
         fbqm._allocateNewWorkers(queueStats, freeWorkerSlots, optimalWorkers)
         expect(queueStat.allocatedWorkers).to.equal -1
 
-
       it 'allocates needIncrease if it has to', ->
         queueStat = {needIncrease: -2}
         queueStats = [queueStat]
@@ -500,110 +499,72 @@ describe 'FirebaseQueuesManager', ->
         expect(mockQueue1.addWorker).to.have.been.called.exactly(10)
         expect(mockQueue2.addWorker).to.have.been.called.exactly(10)
 
+    describe 'checkQueues', ->
 
-
-    describe.only 'checkQueues', ->
-
-      # it 'calls _freeWorkerSlots with osMonitor stats', ->
-      #   stats =
-      #     cpu: percent: 0.5
-      #     memory: percent: 0.5
-      #   osMonitorMock = {
-      #     getStats: -> Promise.resolve(stats)
-      #   }
-      #   fbqm = new FirebaseQueuesManager(logger, osMonitorMock)
-      #   expect(fbqm.osMonitor).to.equal osMonitorMock
-      #   spy = chai.spy.on(fbqm, '_freeWorkerSlots')
-      #   fbqm.checkQueues().then ->
-      #     expect(spy).to.be.called.with.exactly(0.5, 0.5, 0)
-
-
-      # it 'calls _freeUpWorkers when neededWorkers > freeWorkerSlots', ->
-      #   stats = cpu: {percent: null}, memory: {percent: null}
-
-      #   osMonitorMock = getStats: -> Promise.resolve(stats)
-      #   fbqm = new FirebaseQueuesManager(logger, osMonitorMock)
-      #   fbqm._freeWorkerSlots = -> return 0
-      #   fbqm._sumTotalNeededWorkers = -> return 10
-      #   _freeUpWorkersSpy = chai.spy(-> return [])
-      #   fbqm._freeUpWorkers = _freeUpWorkersSpy
-      #   fbqm.checkQueues().then ->
-      #     expect(_freeUpWorkersSpy).to.be.called.with.exactly([], 10)
-
-      # it 'calls _allocateNewWorkers when freeWorkerSlots', ->
-      #   stats = cpu: {percent: null}, memory: {percent: null}
-
-      #   osMonitorMock = getStats: -> Promise.resolve(stats)
-      #   fbqm = new FirebaseQueuesManager(logger, osMonitorMock)
-      #   fbqm._freeWorkerSlots = -> return 10
-      #   fbqm._sumTotalNeededWorkers = -> return 10
-      #   _allocateNewWorkersSpy = chai.spy(-> return [])
-      #   fbqm._allocateNewWorkers = _allocateNewWorkersSpy
-      #   fbqm.checkQueues().then ->
-      #     expect(_allocateNewWorkersSpy).to.be.called.with.exactly([], 10, 0)
-
-      # it 'calls checkQueues each time a worker shutsdown', ->
-      #   stats = cpu: {percent: null}, memory: {percent: null}
-
-      #   osMonitorMock = getStats: -> Promise.resolve(stats)
-      #   fbqm = new FirebaseQueuesManager(logger, osMonitorMock)
-      #   fbqm._freeWorkerSlots = -> return 0
-      #   fbqm._sumTotalNeededWorkers = -> return 2
-      #   # returns shutdownWorkerPromises
-      #   first = true
-      #   _freeUpWorkersSpy = chai.spy(
-      #     ->
-      #       if first
-      #         first = false
-      #         return [Promise.resolve(), Promise.resolve()]
-      #       return []
-      #   )
-
-      #   checkQueuesSpy = chai.spy.on(fbqm, 'checkQueues')
-      #   fbqm._freeUpWorkers = _freeUpWorkersSpy
-      #   fbqm.checkQueues().then ->
-      #     expect(_freeUpWorkersSpy).to.be.called.with.exactly([], 2)
-      #     # 3 = first call, + then once for each worker shutdown (2)
-      #     expect(checkQueuesSpy).to.be.called.exactly(3)
-
-      it 'allocate up until cpu threshold', ->
-        mockQueue = (name) ->
-          workerCount = 1
-          tasksRef = {}
-          tasksRef.toString = -> return name
-          return {
-            tasksRef
-            getWorkerCount: -> return workerCount
-            addWorker: ->
-              workerCount++
-            shutdownWorker: -> workerCount--
-          }
-
-        mockMonitor = ->
-          getPendingTasksCount: -> 3
-          peakRcdTasksPS: -> 3
-          avgProcTimePerTask: -> 3
-
-        mockQueue1 = mockQueue('one')
-        mockQueue2 = mockQueue('two')
-
-        osMonitorMock = getStats: ->
-          perTaskCpu = 0.1
-          totalWorkers = mockQueue1.getWorkerCount() + mockQueue2.getWorkerCount()
-          stats = cpu: {percent: perTaskCpu * totalWorkers}, memory: {percent: null}
-          console.log 'total workers:', totalWorkers
-          console.log perTaskCpu * totalWorkers
-          return Promise.resolve(stats)
-
+      it 'calls _freeWorkerSlots with osMonitor stats', ->
+        stats =
+          cpu: percent: 0.5
+          memory: percent: 0.5
+        osMonitorMock = {
+          getStats: -> Bluebird.resolve(stats)
+        }
         fbqm = new FirebaseQueuesManager(logger, osMonitorMock)
-        fbqm.addQueue mockQueue1, mockMonitor()
-        fbqm.addQueue mockQueue2, mockMonitor()
+        expect(fbqm.osMonitor).to.equal osMonitorMock
+        spy = chai.spy.on(fbqm, '_freeWorkerSlots')
         fbqm.checkQueues().then ->
-          expect(mockQueue1.getWorkerCount()).to.equal 8
-          expect(mockQueue2.getWorkerCount()).to.equal 1
+          expect(spy).to.be.called.with.exactly(0.5, 0.5, 0)
 
-      it 're-allocate up until cpu threshold', ->
-        mockQueue = (name) ->
+
+      it 'calls _freeUpWorkers when neededWorkers > freeWorkerSlots', ->
+        stats = cpu: {percent: null}, memory: {percent: null}
+
+        osMonitorMock = getStats: -> Bluebird.resolve(stats)
+        fbqm = new FirebaseQueuesManager(logger, osMonitorMock)
+        fbqm._freeWorkerSlots = -> return 0
+        fbqm._sumTotalNeededWorkers = -> return 10
+        _freeUpWorkersSpy = chai.spy(-> return [])
+        fbqm._freeUpWorkers = _freeUpWorkersSpy
+        fbqm.checkQueues().then ->
+          expect(_freeUpWorkersSpy).to.be.called.with.exactly([], 10)
+
+      it 'calls _allocateNewWorkers when freeWorkerSlots', ->
+        stats = cpu: {percent: null}, memory: {percent: null}
+
+        osMonitorMock = getStats: -> Bluebird.resolve(stats)
+        fbqm = new FirebaseQueuesManager(logger, osMonitorMock)
+        fbqm._freeWorkerSlots = -> return 10
+        fbqm._sumTotalNeededWorkers = -> return 10
+        _allocateNewWorkersSpy = chai.spy(-> return [])
+        fbqm._allocateNewWorkers = _allocateNewWorkersSpy
+        fbqm.checkQueues().then ->
+          expect(_allocateNewWorkersSpy).to.be.called.with.exactly([], 10, 0)
+
+      it 'calls checkQueues each time a worker shutsdown', ->
+        stats = cpu: {percent: null}, memory: {percent: null}
+
+        osMonitorMock = getStats: -> Bluebird.resolve(stats)
+        fbqm = new FirebaseQueuesManager(logger, osMonitorMock)
+        fbqm._freeWorkerSlots = -> return 0
+        fbqm._sumTotalNeededWorkers = -> return 2
+        # returns shutdownWorkerBluebirds
+        first = true
+        _freeUpWorkersSpy = chai.spy(
+          ->
+            if first
+              first = false
+              return [Bluebird.resolve(), Bluebird.resolve()]
+            return []
+        )
+
+        checkQueuesSpy = chai.spy.on(fbqm, 'checkQueues')
+        fbqm._freeUpWorkers = _freeUpWorkersSpy
+        fbqm.checkQueues().then ->
+          expect(_freeUpWorkersSpy).to.be.called.with.exactly([], 2)
+          # 3 = first call, + then once for each worker shutdown (2)
+          expect(checkQueuesSpy).to.be.called.exactly(3)
+
+      describe 'allocates', ->
+        MockQueue = (name, startWorkerCount) ->
           workerCount = 1
           tasksRef = {}
           tasksRef.toString = -> return name
@@ -613,142 +574,155 @@ describe 'FirebaseQueuesManager', ->
             addWorker: -> workerCount++
             shutdownWorker: ->
               workerCount--
-              Promise.resolve()
+              Bluebird.resolve()
           }
 
-        mockMonitor = ->
-          getPendingTasksCount: -> 3
-          peakRcdTasksPS: -> 3
-          avgProcTimePerTask: -> 3
-
-        mockQueueCanReduce3 = (name) ->
-          workerCount = 3
-          tasksRef = {}
-          tasksRef.toString = -> return name
-          return {
-            tasksRef
-            getWorkerCount: -> return workerCount
-            addWorker: -> workerCount++
-            shutdownWorker: ->
-              workerCount--
-              Promise.resolve()
-
-          }
-
-        mockMonitorCanReduceThree = ->
+        MockMonitor = ->
           getPendingTasksCount: -> 0
           peakRcdTasksPS: -> 3
-          avgProcTimePerTask: -> 3
+          avgProcTimePerTask: -> 0
 
-        mockQueue1 = mockQueue('one')
-        mockQueue2 = mockQueue('two')
-        mockQueue3 = mockQueueCanReduce3('three')
+        OsMonitorMock = (perWorkerCpu, mockQueues) ->
+          getStats: ->
+            totalWorkers = 0
+            for mockQueue in mockQueues
+              totalWorkers += mockQueue.getWorkerCount()
 
-        osMonitorMock = getStats: ->
-          perTaskCpu = 0.1
-          totalWorkers = mockQueue1.getWorkerCount() + mockQueue2.getWorkerCount() + mockQueue3.getWorkerCount()
-          cpuUse = (perTaskCpu * 10) * totalWorkers / 10
-          stats = cpu: {percent: cpuUse}, memory: {percent: null}
-          # console.log 'total workers:', totalWorkers
-          # console.log 'cpuUse: ', cpuUse
+            stats = cpu: {percent: perWorkerCpu * totalWorkers}, memory: {percent: null}
+            return Bluebird.delay(100).then -> return stats
 
-          return Promise.resolve(stats)
+        it 'up until cpu threshold', ->
+          mockQueue1 = MockQueue('one')
+          mockQueue2 = MockQueue('two')
+          mockMonitor1 = MockMonitor()
+          mockMonitor2 = MockMonitor()
 
-        fbqm = new FirebaseQueuesManager(logger, osMonitorMock)
-        fbqm.addQueue mockQueue1, mockMonitor1 = mockMonitor()
-        fbqm.addQueue mockQueue2, mockMonitor2 = mockMonitor()
-        fbqm.addQueue mockQueue3, mockMonitor3 = mockMonitorCanReduceThree()
-        fbqm.checkQueues().then ->
-          expect(mockQueue1.getWorkerCount()).to.equal 7
-          expect(mockQueue2.getWorkerCount()).to.equal 1
-          expect(mockQueue3.getWorkerCount()).to.equal 1
+          # Force mockQueue1 to need 9 workers (request 8)
+          mockMonitor1.getPendingTasksCount = -> 3
+          mockMonitor1.avgProcTimePerTask = -> 3
+          # This allows for 9 total workers
+          osMonitorMock = OsMonitorMock(0.1, [mockQueue1, mockQueue2])
+
+          fbqm = new FirebaseQueuesManager(logger, osMonitorMock)
+          fbqm.addQueue mockQueue1, mockMonitor1
+          fbqm.addQueue mockQueue2, mockMonitor2
+          fbqm.checkQueues().then ->
+            expect(mockQueue1.getWorkerCount()).to.equal 8
+            expect(mockQueue2.getWorkerCount()).to.equal 1
+            expect(mockQueue1.getWorkerCount() + mockQueue2.getWorkerCount()).to.equal 9
+
+        it 're-allocate up until cpu threshold', ->
+          # Reallocate MockQueue3 3 excess workers to mockQueue1
+          mockQueue1 = MockQueue('one')
+          mockQueue2 = MockQueue('two')
+          mockQueue3 = MockQueue('three', startWith3Workers=3)
+          mockMonitor1 = MockMonitor()
+          mockMonitor2 = MockMonitor()
+          mockMonitor3 = MockMonitor()
+
+          mockMonitor1.getPendingTasksCount = -> 3
+          mockMonitor1.avgProcTimePerTask = -> 3
+
+          osMonitorMock = OsMonitorMock(0.1, [mockQueue1, mockQueue2, mockQueue3])
+          thresholdReachedCB = chai.spy()
+          fbqm = new FirebaseQueuesManager(logger, osMonitorMock, null, null, thresholdReachedCB)
+          fbqm.addQueue mockQueue1, mockMonitor1
+          fbqm.addQueue mockQueue2, mockMonitor2
+          fbqm.addQueue mockQueue3, mockMonitor3
           fbqm.checkQueues().then ->
             expect(mockQueue1.getWorkerCount()).to.equal 7
             expect(mockQueue2.getWorkerCount()).to.equal 1
             expect(mockQueue3.getWorkerCount()).to.equal 1
-        .then ->
-          mockMonitor1.getPendingTasksCount = -> return 1
-          fbqm.checkQueues().then ->
-            expect(mockQueue1.getWorkerCount()).to.equal 4
-            expect(mockQueue2.getWorkerCount()).to.equal 4
-            expect(mockQueue3.getWorkerCount()).to.equal 1
-        .then ->
-          mockMonitor1.getPendingTasksCount = -> return 3
-          mockMonitor2.getPendingTasksCount = -> return 0
-          mockMonitor3.getPendingTasksCount = -> return 3
+            # call it again to make sure it stabilises
+            fbqm.checkQueues().then ->
+              expect(mockQueue1.getWorkerCount()).to.equal 7
+              expect(mockQueue2.getWorkerCount()).to.equal 1
+              expect(mockQueue3.getWorkerCount()).to.equal 1
+              expect(thresholdReachedCB).to.have.been.called()
+
+        it 're-allocate with changing load', ->
+          mockQueue1 = MockQueue('one')
+          mockQueue2 = MockQueue('two')
+          mockQueue3 = MockQueue('three', startWith3Workers=3)
+          mockMonitor1 = MockMonitor()
+          mockMonitor2 = MockMonitor()
+          mockMonitor3 = MockMonitor()
+
+          mockMonitor1.getPendingTasksCount = -> 3
+          mockMonitor1.avgProcTimePerTask = -> 3
+          mockMonitor2.avgProcTimePerTask = -> 3
+          mockMonitor3.avgProcTimePerTask = -> 3
+
+          getSumOfMockWorkers = ->
+            mockQueue1.getWorkerCount() + mockQueue2.getWorkerCount() + mockQueue3.getWorkerCount()
+
+          osMonitorMock = OsMonitorMock(0.1, [mockQueue1, mockQueue2, mockQueue3])
+          thresholdReachedCB = chai.spy()
+          fbqm = new FirebaseQueuesManager(logger, osMonitorMock, null, null, thresholdReachedCB)
+          fbqm.addQueue mockQueue1, mockMonitor1
+          fbqm.addQueue mockQueue2, mockMonitor2
+          fbqm.addQueue mockQueue3, mockMonitor3
           fbqm.checkQueues().then ->
             expect(mockQueue1.getWorkerCount()).to.equal 7
             expect(mockQueue2.getWorkerCount()).to.equal 1
             expect(mockQueue3.getWorkerCount()).to.equal 1
-        .then ->
-          mockMonitor1.getPendingTasksCount = -> return 0
-          mockMonitor2.getPendingTasksCount = -> return 0
-          mockMonitor3.getPendingTasksCount = -> return 3
-          fbqm.checkQueues().then ->
-            expect(mockQueue1.getWorkerCount()).to.equal 1
-            expect(mockQueue2.getWorkerCount()).to.equal 1
-            expect(mockQueue3.getWorkerCount()).to.equal 7
-        .then ->
-
-          mockMonitor1.getPendingTasksCount = -> return 1
-          mockMonitor2.getPendingTasksCount = -> return 0
-          mockMonitor3.getPendingTasksCount = -> return 2
-          fbqm.checkQueues().then ->
-            expect(mockQueue1.getWorkerCount()).to.equal 1
-            expect(mockQueue2.getWorkerCount()).to.equal 1
-            expect(mockQueue3.getWorkerCount()).to.equal 7
-      # it 'getStats', ->
-      #   osMonitorMock = getStats: ->
-      #     Bluebird.delay(500)
-
-      #   fbqm = new FirebaseQueuesManager(logger, osMonitorMock)
-      #   fbqm.getStats(1)
-      #   fbqm.getStats(2)
-      #   fbqm.getStats(3)
-      #   fbqm.getStats(4)
-      #   fbqm.getStats(5)
-      #   fbqm.getStats(6)
-      #   fbqm.getStats(7).then ->
-      #     fbqm.getStats(8)
-      #     fbqm.getStats(9)
-      #     fbqm.getStats(10)
-      #     fbqm.getStats(11)
-      #     fbqm.getStats(12)
-      #     fbqm.getStats(13)
-      #     fbqm.getStats(14).then ->
-      #       console.log fbqm.currentFetch
-      #       console.log JSON.stringify(fbqm.currentFetch)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-  #   # This should be run on an interval
-  # checkQueues: ->
-  #   @osMonitor.getStats().then (stats) =>
-  #     usedCpuPercent = stats.cpu.percent
-  #     usedMemPercent = stats.memory.percent
-  #     freeWorkerSlots = @_freeWorkerSlots(usedCpuPercent, usedMemPercent, @_sumTotalWorkers())
-
-  #     queueStats = @_getQueueStats()
-  #     neededWorkers = @_sumTotalNeededWorkers(queueStats)
-  #     optimalWorkers = @_sumTotalOptimalWorkers(queueStats)
-
-  #     if neededWorkers > freeWorkerSlots
-  #       shutdownWorkerPromises = @_freeUpWorkers(neededWorkers-freeWorkerSlots)
-  #       for shutdownWorker in shutdownWorkerPromises
-  #         shutdownWorker.then =>
-  #           @checkQueues()
-
-  #     # Allocate what we can
-  #     if freeWorkerSlots > 0
-  #       @_allocateNewWorkers(queueStats, freeWorkerSlots, optimalWorkers)
+            expect(getSumOfMockWorkers()).to.equal 9
+          .then ->
+            mockMonitor1.getPendingTasksCount = -> 1
+            mockMonitor2.getPendingTasksCount = -> 3
+            fbqm.checkQueues().then ->
+              fbqm.checkQueues().then ->
+                expect(mockQueue1.getWorkerCount()).to.equal 3
+                expect(mockQueue2.getWorkerCount()).to.equal 5
+                expect(mockQueue3.getWorkerCount()).to.equal 1
+                expect(getSumOfMockWorkers()).to.equal 9
+          .then ->
+            mockMonitor1.getPendingTasksCount = -> 3
+            mockMonitor2.getPendingTasksCount = -> 0
+            mockMonitor3.getPendingTasksCount = -> 3
+            fbqm.checkQueues().then ->
+              fbqm.checkQueues().then ->
+                expect(mockQueue1.getWorkerCount()).to.equal 7
+                expect(mockQueue2.getWorkerCount()).to.equal 1
+                expect(mockQueue3.getWorkerCount()).to.equal 1
+                expect(getSumOfMockWorkers()).to.equal 9
+          .then ->
+            mockMonitor1.getPendingTasksCount = -> 0
+            mockMonitor2.getPendingTasksCount = -> 0
+            mockMonitor3.getPendingTasksCount = -> 3
+            fbqm.checkQueues().then ->
+              fbqm.checkQueues().then ->
+                expect(mockQueue1.getWorkerCount()).to.equal 1
+                expect(mockQueue2.getWorkerCount()).to.equal 1
+                expect(mockQueue3.getWorkerCount()).to.equal 7
+                expect(getSumOfMockWorkers()).to.equal 9
+          .then ->
+            mockMonitor1.getPendingTasksCount = -> 2
+            mockMonitor2.getPendingTasksCount = -> 0
+            mockMonitor3.getPendingTasksCount = -> 2
+            fbqm.checkQueues().then ->
+              fbqm.checkQueues().then ->
+                expect(mockQueue1.getWorkerCount()).to.equal 2
+                expect(mockQueue2.getWorkerCount()).to.equal 1
+                expect(mockQueue3.getWorkerCount()).to.equal 6
+                expect(getSumOfMockWorkers()).to.equal 9
+          .then ->
+            mockMonitor1.getPendingTasksCount = -> 3
+            mockMonitor2.getPendingTasksCount = -> 0
+            mockMonitor3.getPendingTasksCount = -> 1
+            fbqm.checkQueues().then ->
+              fbqm.checkQueues().then ->
+                expect(mockQueue1.getWorkerCount()).to.equal 5
+                expect(mockQueue2.getWorkerCount()).to.equal 1
+                expect(mockQueue3.getWorkerCount()).to.equal 3
+                expect(getSumOfMockWorkers()).to.equal 9
+          .then ->
+            mockMonitor1.getPendingTasksCount = -> 0
+            mockMonitor2.getPendingTasksCount = -> 9
+            mockMonitor3.getPendingTasksCount = -> 0
+            fbqm.checkQueues().then ->
+              fbqm.checkQueues().then ->
+                expect(mockQueue1.getWorkerCount()).to.equal 1
+                expect(mockQueue2.getWorkerCount()).to.equal 7
+                expect(mockQueue3.getWorkerCount()).to.equal 1
+                expect(getSumOfMockWorkers()).to.equal 9

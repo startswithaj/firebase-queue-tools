@@ -43,9 +43,9 @@ module.exports = class FirebaseQueuesManager
   checkQueues: ->
     @logger.log 'FirebaseQueuesManager.checkQueues'
 
-    # Essentially we are just debouncing
+    # Essentially we are just debouncing calls to getStats()
     if @pendingCheck
-      return @pendingCheck
+      return
 
     @pendingCheck = @osMonitor.getStats().then (stats) =>
       @pendingCheck = null
@@ -162,14 +162,15 @@ module.exports = class FirebaseQueuesManager
 
     return freeSlots
 
-  _canReduceWorkers: (currentWorkerCount, pendingTasks, avgProcTimePerTask, peakRcdTasksPS, minWorkers) ->
-    if currentWorkerCount <= minWorkers
+  _canReduceWorkers: (currentWorkerCount, pendingTasks = 0, avgProcTimePerTask = 0, peakRcdTasksPS, minWorkers = 1) ->
+    neededWorkers = Math.max(minWorkers, pendingTasks*avgProcTimePerTask)
+    canReduce = currentWorkerCount - neededWorkers
+
+    if canReduce > 0
+      return canReduce
+    else
       return 0
 
-    if currentWorkerCount > (pendingTasks*avgProcTimePerTask)
-      return (currentWorkerCount - Math.floor(pendingTasks*avgProcTimePerTask)) - minWorkers
-
-    return 0
 
   _needsMoreWorkers:  (currentWorkerCount, pendingTasks, avgProcTimePerTask, peakRcdTasksPS) ->
     nowNeededWorkers = Math.floor(pendingTasks * avgProcTimePerTask)
