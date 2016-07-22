@@ -1,7 +1,8 @@
 assert = require 'assert'
 Bluebird = require 'bluebird'
 FirebaseQueueMonitor = require './FirebaseQueueMonitor'
-checkQueueCount = 0
+osMonitor = require './osMonitor'
+
 module.exports = class FirebaseQueuesManager
 
   ###*
@@ -14,7 +15,7 @@ module.exports = class FirebaseQueuesManager
   ###
   constructor: (@logger, @osMonitor, @cpuThreshold = 0.9, @memThreshold = 0.9, @thresholdReachedCB) ->
     @logger ?= console
-
+    @osMonitor ?= osMonitor
     @managedQueues = []
 
   addQueue: (queue, queueMonitor, minWorkers = 1, priority) ->
@@ -146,6 +147,7 @@ module.exports = class FirebaseQueuesManager
   # aka free system resounces can support another ~x workers
   _freeWorkerSlots: (cpuUsed, memUsed, currentWorkerCount) ->
     if cpuUsed > @cpuThreshold or memUsed > @memThreshold
+      @logger.warn 'FirebaseQueuesManager._freeWorkerSlots cpu/memory threshold reached', cpuUsed, memUsed
       @thresholdReachedCB?({cpuUsed, memUsed})
       return 0
 
