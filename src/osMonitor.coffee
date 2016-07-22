@@ -1,3 +1,6 @@
+# Various bits of this were stolen from stackoverflow posts
+# I take no credit for any of it.
+
 os = require 'os'
 Bluebird = require 'bluebird'
 
