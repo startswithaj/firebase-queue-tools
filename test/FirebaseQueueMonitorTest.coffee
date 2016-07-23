@@ -195,12 +195,18 @@ describe 'FirebaseQueueMonitor', ->
       expect(firebaseQueueMonitor.snapshots[1].intervalTasksAdded).to.equal 2
       expect(firebaseQueueMonitor.addedIntervalSnapshot).to.equal 3
 
-    # it 'startQueue', ->
-    #   spy = chai.spy()
-    #   firebaseQueueMonitor = new FirebaseQueueMonitor({tasksRef}, {}, spy, logger)
-    #   firebaseQueueMonitor.addOneQueue()
-    #   expect(spy).to.have.been.called()
-    #   expect(firebaseQueueMonitor.workers.length).to.equal 1
+    it.only 'snapshotToString', ->
+      snap = {
+        time: 1469261748906,
+        intervalTasksAdded: 10
+        averageRunTime: 4000
+        averageWaitTime: 300
+        pendingCount: 5
+        inProgressCount: 5
+      }
+      firebaseQueueMonitor = new FirebaseQueueMonitor({tasksRef}, {}, null, logger)
+      console.log firebaseQueueMonitor.snapshotToString(snap)
+
 
     # it 'startQueue', ->
     #   spy = chai.spy()

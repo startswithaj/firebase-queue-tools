@@ -24,6 +24,8 @@ module.exports = class FirebaseQueueManager
     @snapshots = []
     @startTakingSnapShot(@config.interval)
 
+    @tasksRefPath = tasksRef.path.toString()
+
     tasksRef.on 'child_added', (snapshot) =>
       @taskAddedOrChanged(snapshot)
     tasksRef.on 'child_changed', (snapshot) =>
@@ -60,7 +62,7 @@ module.exports = class FirebaseQueueManager
     clearInterval @interval
 
   added: (key) ->
-    @logger.log "Task #{key} added"
+    @logger.log @tasksRefPath + " Task #{key} added"
     unless @pendingTasks[key]
       @addedTotal++
       @pendingTasks[key] = Date.now()
@@ -70,8 +72,8 @@ module.exports = class FirebaseQueueManager
     if time = @pendingTasks[key]
       taskWaitTime = Date.now() - time
 
-      @logger.log 'task wait time', taskWaitTime
-      @logger.log 'average wait time', @averageWaitTime
+      @logger.log @tasksRefPath + 'task wait time', taskWaitTime
+      @logger.log @tasksRefPath + 'average wait time', @averageWaitTime
 
       @averageWaitTime = if @averageWaitTime then (@averageWaitTime + taskWaitTime) / 2 else taskWaitTime
       delete @pendingTasks[key]
@@ -79,17 +81,17 @@ module.exports = class FirebaseQueueManager
     @inProgressTasks[key] = Date.now()
 
   errored: (key) ->
-    @logger.log "Task #{key} errored"
+    @logger.log @tasksRefPath + " Task #{key} errored"
     delete @pendingTasks[key]
     @erroredTasks[key] = Date.now()
 
   finished: (key) ->
-    @logger.log "Task #{key} finished"
+    @logger.log @tasksRefPath + " Task #{key} finished"
     if time = @inProgressTasks[key]
       taskRunTime = Date.now() - time
 
-      @logger.log 'task run time', taskRunTime
-      @logger.log 'average run time', @averageRunTime
+      @logger.log @tasksRefPath + 'task run time', taskRunTime
+      @logger.log @tasksRefPath + 'average run time', @averageRunTime
 
       @averageRunTime = if @averageRunTime then (@averageRunTime + taskRunTime) / 2 else taskRunTime
       delete @inProgressTasks[key]
@@ -113,10 +115,11 @@ module.exports = class FirebaseQueueManager
       averageWaitTime: @averageWaitTime
       pendingCount: @getPendingCount()
       inProgressCount: @getInProgressCount()
+      erroredCount: @getErroredCount()
     }
 
     @snapshots.push snapshot
-    @logger.log snapshot
+    @logger.log @tasksRefPath + ' | ' + @snapshotToString(snapshot)
 
     if @snapshots.length > 200
       @snapshots.shift()
@@ -127,3 +130,13 @@ module.exports = class FirebaseQueueManager
 
   lastSnapShot: ->
     @snapshots[@snapshots.length-1]
+
+  snapshotToString: (snapshot) ->
+    "Pending: #{snapshot.pendingCount}, " +
+      "In Progress: #{snapshot.inProgressCount}, " +
+      "Errored: #{snapshot.erroredCount}, " +
+      "AverageWaitTime: #{snapshot.averageWaitTime}, " +
+      "AverageRunTime: #{snapshot.averageRunTime}, " +
+      "TasksAddedSinceLastSnapshot: #{snapshot.intervalTasksAdded}, " +
+      "Time: #{new Date(snapshot.time)}"
+
